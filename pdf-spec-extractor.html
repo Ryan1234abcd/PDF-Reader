@@ -104,6 +104,7 @@
   --warn-bg:#fff6d6;          /* empty cell highlight                    */
   --error-bg:#ffdcdc;         /* failed cell / row highlight             */
   --ocr-bg:#eaf3ff;           /* cell whose text came from OCR           */
+  --check-bg:#ffe8cc;         /* two readings disagreed - check it       */
 }
 *{box-sizing:border-box}
 body{
@@ -175,23 +176,21 @@ input[type=text], input[type=number]{
   position:absolute; width:9px; height:9px; background:#fff;
   border:1px solid var(--box-selected);
 }
-.fieldBox.offpage{opacity:.30}          /* box belongs to another page */
+
 #drawGhost{position:absolute; border:2px dashed var(--box-selected); background:rgba(198,40,40,.08); display:none}
 
 /* --- field list --------------------------------------------------------- */
 .fieldRow{
-  border:1px solid var(--line); border-radius:3px; padding:6px;
-  margin-bottom:6px; background:#fff;
+  border:1px solid var(--line); border-radius:3px; padding:5px;
+  margin-bottom:4px; background:#fff; cursor:pointer;
 }
 .fieldRow.selected{border-color:var(--box-selected); background:#fff5f5}
+.fieldRow .top input[type=text]{font-weight:600}
+#fieldsPanel.active{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
+#reorderBar{display:flex; gap:6px; align-items:center; margin-bottom:7px}
+#reorderBar .note{color:var(--muted); font-size:11px}
 .fieldRow .top{display:flex; gap:6px; align-items:center}
 .fieldRow .top input[type=text]{flex:1; min-width:0}
-.fieldRow .coords{
-  margin-top:5px; display:grid; grid-template-columns:repeat(4,1fr); gap:4px;
-  font-size:11px; color:var(--muted);
-}
-.fieldRow .coords label{display:flex; flex-direction:column; gap:2px}
-.fieldRow .coords input{width:100%}
 .hint{color:var(--muted); font-size:12px; margin:4px 0 10px}
 
 /* --- results table ------------------------------------------------------ */
@@ -201,6 +200,8 @@ th,td{border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-a
 th{background:var(--panel); position:sticky; top:0; z-index:2; white-space:nowrap}
 td{max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer}
 td.ocr{background:var(--ocr-bg)}
+td.check{background:var(--check-bg)}
+td.check::after{content:' ?'; color:#a35400; font-weight:700}
 td.empty{background:var(--warn-bg)}
 td.error{background:var(--error-bg); color:#8b1a1a; font-style:italic}
 tr.rowFlagged td:first-child{background:var(--error-bg); font-weight:600}
@@ -246,6 +247,9 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
       <option value="never">Never use OCR</option>
     </select>
   </label>
+  <label title="Read every scanned page twice and flag anything the two readings disagree about. Twice as slow, and the only reliable way to catch a decimal point that OCR could not see.">
+    <input type="checkbox" id="ocrDoubleCheck" checked> Double-check scans
+  </label>
   <button type="button" id="btnExportCsv" disabled>Export CSV</button>
   <span class="spacer"></span>
   <button type="button" id="btnClearAll">Clear everything</button>
@@ -277,14 +281,20 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
   </div>
 
   <!-- RIGHT: the list of fields (columns) -->
-  <div class="side">
-    <h2>Fields / columns</h2>
+  <div class="side" id="fieldsPanel" tabindex="0">
+    <h2>Fields / columns <span style="text-transform:none;font-weight:400;color:var(--muted)">&mdash; top of the list is the left-most column</span></h2>
     <div class="hint">
-      Drag on the page image to draw a box, then type its name.
-      A box belongs to the page number shown beside it.
-      Select a box and use the arrow keys to nudge it (hold Shift for bigger steps).
-      Only what is really inside a box is read: draw it around the number alone
-      and the unit beside it (&deg;C, K, kW) is left out.
+      Drag on the page image to draw a box, then type its name. Only what is
+      really inside a box is read: draw it around the number alone and the unit
+      beside it (&deg;C, K, kW) is left out. Boxes are only shown on their own page.
+      <br>Click the page image, then the arrow keys <b>nudge</b> the selected box.
+      Click a field below, then the arrow keys <b>move the column</b> up and down.
+      Ctrl+click (or Shift+click) to pick several at once.
+    </div>
+    <div id="reorderBar">
+      <button type="button" id="btnMoveUp" title="Move the selected columns left">&uarr; Move up</button>
+      <button type="button" id="btnMoveDown" title="Move the selected columns right">&darr; Move down</button>
+      <span class="note" id="selectionNote"></span>
     </div>
     <div id="fieldList"></div>
     <div class="hint" id="fieldEmptyHint">No fields yet.</div>
@@ -295,7 +305,8 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 <div id="tableWrap"><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
 <div class="hint">
   Click any cell to see that PDF page with the box drawn on it and the text that was pulled out.
-  Yellow&nbsp;= nothing found. Blue&nbsp;= read by OCR, so worth a glance.
+  Yellow&nbsp;= nothing found. Blue&nbsp;= read by OCR. Orange&nbsp;<b>?</b>&nbsp;= the two
+  readings of that scanned page disagreed, so check that one.
   Red&nbsp;= could not be read (the page does not exist, or OCR was off or unavailable).
 </div>
 
@@ -336,6 +347,22 @@ const OCR_PAGE_SCALE = 5;
 /* Tesseract's page layout mode. 3 = "work the layout out for yourself",
    which suits these two-column spec sheets. */
 const OCR_PAGE_SEG_MODE = '3';
+
+/* READING EVERY SCANNED PAGE TWICE.
+   On a scan, a decimal point is two or three dark pixels, and whether it
+   survives depends on how the page happens to be turned into pixels - which
+   is why "5.0" can come out as "50". No single setting is right every time
+   (measured on a real sheet: some settings lose the point in one value, other
+   settings lose it in a different one), so instead the page is read a second
+   time at another size and the two readings are compared. Cells where they
+   disagree are marked "check" in orange: those are the ones worth your eye,
+   and everything else agreed twice over.
+
+   This is the starting position of the "Double-check scans" tick box in the
+   toolbar, which is where you turn it off when you want the speed instead. */
+const OCR_DOUBLE_CHECK      = true;
+const OCR_CHECK_PAGE_SCALE  = 7;    /* the size used for the second reading */
+const OCR_CHECK_CONTRAST    = 1.6;  /* 1 = leave alone; higher = harder blacks */
 
 /* OCR is given up on after these many milliseconds. This matters: when the
    engine's files cannot be loaded it stalls silently rather than failing, and
@@ -407,6 +434,7 @@ const TEMPLATE_VERSION    = 1;
 const CELL_ERROR_TEXT = {
   nopage : 'no such page',
   notext : 'scanned page, OCR off',
+  check  : '',                       /* the value is shown; it is just flagged */
   ocrempty:'OCR found nothing',
   ocrfail: 'OCR unavailable',
   docfail: 'could not open PDF'
@@ -421,7 +449,12 @@ const state = {
   files      : [],    /* [{name, file}] every PDF the user dropped            */
   fields     : [],    /* [{id, name, page, x, y, w, h}] fractions 0..1        */
   rows       : [],    /* one result row per PDF, built by Run                 */
-  selectedId : null,  /* id of the field box currently selected               */
+  selectedIds: [],    /* ids of the field boxes currently selected            */
+
+  /* Which half of the screen the arrow keys belong to: the page view (where
+     they nudge the selected box) or the field list (where they move columns
+     up and down). Set by whichever you last clicked in. */
+  focusArea  : 'canvas',
 
   /* what the canvas is showing right now */
   view: {
@@ -461,6 +494,12 @@ function clamp(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
 /** Collapse all runs of whitespace to single spaces and trim the ends. */
 function normaliseWhitespace(s){
   return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+}
+
+/** Two readings of the same value count as agreeing when they differ only in
+    spacing or letter case - "5.0 °C" and "5.0°C" are the same reading. */
+function normaliseForComparison(s){
+  return normaliseWhitespace(s).replace(/\s+/g, '').toLowerCase();
 }
 
 /** Show a red banner at the top of the page (used for real problems only). */
@@ -723,11 +762,16 @@ async function showPdfPage(fileIndex, pageNum, skipUnreadable){
     $('pageLabel').textContent = 'page ' + state.view.pageNum + ' / ' + doc.numPages;
     $('zoomLabel').textContent = Math.round(state.view.zoom * 100) + '%';
     drawAllBoxes();
+    /* The page is on screen now, so Prev/Next can be trusted again. Without
+       this they stay disabled after a Run, which closes the viewer's copy of
+       the document while the batch is read. */
+    refreshButtons();
   } catch (err){
     const name = (state.files[fileIndex] || {}).name || 'this file';
     updateStatus('Could not display "' + name + '" (' + err.message + ').');
     /* Forget the half-open document, then move on to the next file if asked. */
     state.view.doc = null; state.view.docKey = null;
+    refreshButtons();
     if (skipUnreadable) await showPdfPage(fileIndex + 1, 1, true);
   }
 }
@@ -753,6 +797,10 @@ function drawAllBoxes(){
   boxLayer.style.height = canvas.style.height;
 
   for (const field of state.fields){
+    /* A box only appears on the page it belongs to, so page 2 is not covered
+       in page 1's boxes. Use "View" in the field list to jump to its page. */
+    if (field.page !== state.view.pageNum) continue;
+
     const el = document.createElement('div');
     el.className = 'fieldBox';
     el.dataset.id = field.id;
@@ -761,15 +809,13 @@ function drawAllBoxes(){
     el.style.width  = (field.w * 100) + '%';
     el.style.height = (field.h * 100) + '%';
 
-    /* Boxes belonging to a different page are shown faintly, as a reminder. */
-    if (field.page !== state.view.pageNum) el.classList.add('offpage');
-    if (field.id === state.selectedId){
+    if (isSelected(field.id)){
       el.classList.add('selected');
       addResizeHandles(el);
     }
     const tag = document.createElement('div');
     tag.className = 'tag';
-    tag.textContent = field.name + '  (p' + field.page + ')';
+    tag.textContent = field.name;
     el.appendChild(tag);
 
     boxLayer.appendChild(el);
@@ -890,28 +936,62 @@ window.addEventListener('mouseup', (e) => {
   }
 });
 
-/* Arrow keys nudge the selected box, as long as you are not typing in a box. */
+/*
+ * The arrow keys do one of two jobs, depending on which half of the screen you
+ * last clicked in:
+ *   page view  - nudge the selected box(es) around the page
+ *   field list - move the selected column(s) up and down the order
+ * Typing in a text box is never interrupted.
+ */
 window.addEventListener('keydown', (e) => {
-  if (!state.selectedId) return;
   const tag = (e.target.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea') return;
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (!state.selectedIds.length) return;
 
-  const field = findField(state.selectedId);
-  if (!field) return;
+  const fields = selectedFields();
+  if (!fields.length) return;
+
+  /* --- in the field list: reorder the columns --- */
+  if (state.focusArea === 'list'){
+    if (e.key === 'ArrowUp')        { e.preventDefault(); moveSelectedFields(-1); return; }
+    if (e.key === 'ArrowDown')      { e.preventDefault(); moveSelectedFields(+1); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace'){
+      e.preventDefault();
+      fields.forEach(f => deleteField(f.id));
+      return;
+    }
+    return;
+  }
+
+  /* --- on the page: nudge every selected box together --- */
   const step = e.shiftKey ? NUDGE_STEP_BIG : NUDGE_STEP;
   let handled = true;
 
-  switch (e.key){
-    case 'ArrowLeft':  field.x = clamp(field.x - step, 0, 1 - field.w); break;
-    case 'ArrowRight': field.x = clamp(field.x + step, 0, 1 - field.w); break;
-    case 'ArrowUp':    field.y = clamp(field.y - step, 0, 1 - field.h); break;
-    case 'ArrowDown':  field.y = clamp(field.y + step, 0, 1 - field.h); break;
-    case 'Delete':
-    case 'Backspace':  deleteField(field.id); return;
-    default: handled = false;
+  for (const field of fields){
+    switch (e.key){
+      case 'ArrowLeft':  field.x = clamp(field.x - step, 0, 1 - field.w); break;
+      case 'ArrowRight': field.x = clamp(field.x + step, 0, 1 - field.w); break;
+      case 'ArrowUp':    field.y = clamp(field.y - step, 0, 1 - field.h); break;
+      case 'ArrowDown':  field.y = clamp(field.y + step, 0, 1 - field.h); break;
+      case 'Delete':
+      case 'Backspace':  deleteField(field.id); continue;
+      default: handled = false;
+    }
   }
   if (handled){ e.preventDefault(); drawAllBoxes(); renderFieldList(); }
 });
+
+/* Remember which half of the screen you are working in. */
+boxLayer.addEventListener('mousedown', () => {
+  state.focusArea = 'canvas';
+  updateSelectionNote();
+});
+$('fieldsPanel').addEventListener('mousedown', () => {
+  state.focusArea = 'list';
+  updateSelectionNote();
+});
+$('btnMoveUp').addEventListener('click',   () => moveSelectedFields(-1));
+$('btnMoveDown').addEventListener('click', () => moveSelectedFields(+1));
 
 
 /* ===========================================================================
@@ -920,6 +1000,92 @@ window.addEventListener('keydown', (e) => {
 
 function findField(id){
   return state.fields.find(f => String(f.id) === String(id)) || null;
+}
+
+/* --- which fields are selected -------------------------------------------
+   More than one can be selected at a time, so several columns can be moved
+   (or several boxes nudged) together.                                      */
+
+function isSelected(id){
+  return state.selectedIds.some(sel => String(sel) === String(id));
+}
+
+/** The fields that are selected, in the order they appear in the list. */
+function selectedFields(){
+  return state.fields.filter(f => isSelected(f.id));
+}
+
+/** Select just this one (or nothing, when given null). */
+function selectField(id){
+  state.selectedIds = (id === null || id === undefined) ? [] : [id];
+  afterSelectionChanged();
+}
+
+/** Add to, or remove from, the selection - for Ctrl+click. */
+function toggleFieldSelected(id){
+  state.selectedIds = isSelected(id)
+    ? state.selectedIds.filter(sel => String(sel) !== String(id))
+    : state.selectedIds.concat([id]);
+  afterSelectionChanged();
+}
+
+/** Select everything between the last pick and this one - for Shift+click. */
+function extendSelectionTo(id){
+  const last = state.selectedIds[state.selectedIds.length - 1];
+  const from = state.fields.findIndex(f => String(f.id) === String(last));
+  const to   = state.fields.findIndex(f => String(f.id) === String(id));
+  if (from < 0 || to < 0) return selectField(id);
+  const [lo, hi] = from < to ? [from, to] : [to, from];
+  state.selectedIds = state.fields.slice(lo, hi + 1).map(f => f.id);
+  afterSelectionChanged();
+}
+
+function afterSelectionChanged(){
+  drawAllBoxes();
+  renderFieldList();
+  updateSelectionNote();
+}
+
+/** Say what is selected, and which half of the screen the arrows belong to. */
+function updateSelectionNote(){
+  const count = state.selectedIds.length;
+  const note  = count === 0 ? 'nothing selected'
+              : count + (count === 1 ? ' field selected' : ' fields selected');
+  const where = state.focusArea === 'list'
+    ? ' - arrows move columns'
+    : ' - arrows nudge the box';
+  $('selectionNote').textContent = note + (count ? where : '');
+  $('fieldsPanel').classList.toggle('active', state.focusArea === 'list');
+  $('btnMoveUp').disabled   = !count;
+  $('btnMoveDown').disabled = !count;
+}
+
+/**
+ * Move the selected fields one place up or down the list, which is the same
+ * as moving those columns left or right in the table and the CSV.
+ */
+function moveSelectedFields(direction){
+  if (!state.selectedIds.length) return;
+  const positions = state.fields
+    .map((f, i) => ({ f, i }))
+    .filter(entry => isSelected(entry.f.id))
+    .map(entry => entry.i);
+
+  /* Going up, deal with the topmost first; going down, the bottom-most. */
+  const order = direction < 0 ? positions : positions.slice().reverse();
+
+  for (const i of order){
+    const target = i + direction;
+    if (target < 0 || target >= state.fields.length) continue;
+    /* Do not step over another selected field - the block moves as one. */
+    if (isSelected(state.fields[target].id)) continue;
+    const moved = state.fields.splice(i, 1)[0];
+    state.fields.splice(target, 0, moved);
+  }
+  renderFieldList();
+  drawAllBoxes();
+  updateSelectionNote();
+  refreshButtons();
 }
 
 /**
@@ -956,16 +1122,10 @@ function addField(rect){
 
 function deleteField(id){
   state.fields = state.fields.filter(f => String(f.id) !== String(id));
-  if (String(state.selectedId) === String(id)) state.selectedId = null;
+  state.selectedIds = state.selectedIds.filter(sel => String(sel) !== String(id));
   drawAllBoxes();
   renderFieldList();
   refreshButtons();
-}
-
-function selectField(id){
-  state.selectedId = id;
-  drawAllBoxes();
-  renderFieldList();
 }
 
 /** Rebuild the field list panel on the right. */
@@ -976,7 +1136,7 @@ function renderFieldList(){
 
   for (const field of state.fields){
     const row = document.createElement('div');
-    row.className = 'fieldRow' + (String(field.id) === String(state.selectedId) ? ' selected' : '');
+    row.className = 'fieldRow' + (isSelected(field.id) ? ' selected' : '');
     row.dataset.id = field.id;
 
     /* --- name, page number, buttons --- */
@@ -1027,32 +1187,16 @@ function renderFieldList(){
 
     top.append(name, pageLbl, page, goto, del);
 
-    /* --- the four coordinates, shown as percentages of the page --- */
-    const coords = document.createElement('div');
-    coords.className = 'coords';
-    const parts = [['x','x'], ['y','y'], ['w','width'], ['h','height']];
-    for (const [key, label] of parts){
-      const wrap = document.createElement('label');
-      const cap  = document.createElement('span');
-      cap.textContent = label + ' %';
-      const inp = document.createElement('input');
-      inp.type = 'number'; inp.step = '0.1';
-      inp.value = (field[key] * 100).toFixed(1);
-      inp.addEventListener('change', () => {
-        const v = clamp((parseFloat(inp.value) || 0) / 100, 0, 1);
-        field[key] = key === 'w' || key === 'h' ? Math.max(0.002, v) : v;
-        /* keep the box on the page */
-        field.w = Math.min(field.w, 1 - field.x);
-        field.h = Math.min(field.h, 1 - field.y);
-        drawAllBoxes(); renderFieldList(); refreshButtons();
-      });
-      wrap.append(cap, inp);
-      coords.appendChild(wrap);
-    }
+    /* The exact coordinates are not shown: the box on the page is the truth,
+       and leaving them out keeps many more fields visible in this list. */
+    row.append(top);
 
-    row.append(top, coords);
     row.addEventListener('mousedown', (e) => {
-      if (e.target.tagName.toLowerCase() !== 'button') selectField(field.id);
+      if (e.target.tagName.toLowerCase() === 'button') return;
+      if (e.target.tagName.toLowerCase() === 'input')  { selectField(field.id); return; }
+      if (e.ctrlKey || e.metaKey)  toggleFieldSelected(field.id);
+      else if (e.shiftKey)         extendSelectionTo(field.id);
+      else                         selectField(field.id);
     });
     list.appendChild(row);
   }
@@ -1311,9 +1455,24 @@ async function startOcrEngine(){
   }
 }
 
+/** Make the darks darker and the lights lighter, which helps small marks
+    such as a decimal point survive being turned into black and white. */
+function boostCanvasContrast(canvas, amount){
+  if (!amount || amount === 1) return;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = image.data;
+  for (let i = 0; i < pixels.length; i += 4){
+    const grey = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+    const stretched = clamp((grey - 128) * amount + 128, 0, 255);
+    pixels[i] = pixels[i + 1] = pixels[i + 2] = stretched;
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
 /** Draw one page at OCR resolution onto a canvas that is not on screen. */
-async function renderPageForOcr(page){
-  const viewport = page.getViewport({ scale: OCR_PAGE_SCALE });
+async function renderPageForOcr(page, scale, contrast){
+  const viewport = page.getViewport({ scale: scale || OCR_PAGE_SCALE });
   const canvas = document.createElement('canvas');
   canvas.width  = Math.floor(viewport.width);
   canvas.height = Math.floor(viewport.height);
@@ -1323,6 +1482,7 @@ async function renderPageForOcr(page){
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+  boostCanvasContrast(canvas, contrast);
   return canvas;
 }
 
@@ -1330,9 +1490,15 @@ async function renderPageForOcr(page){
  * OCR one page and return its words in the same shape the text layer uses:
  * { text, left, top, right, bottom, height }, all fractions of the page.
  */
-async function ocrPageToItems(page){
+async function ocrPageToItems(page, scale, contrast){
   const worker = await startOcrEngine();
-  const canvas = await renderPageForOcr(page);
+  const canvas = await renderPageForOcr(page, scale, contrast);
+
+  /* Tell Tesseract the true resolution of what it is about to read. */
+  await worker.setParameters({
+    tessedit_pageseg_mode: OCR_PAGE_SEG_MODE,
+    user_defined_dpi     : String(Math.round(72 * (scale || OCR_PAGE_SCALE)))
+  });
 
   try {
     const result = await withTimeout(
@@ -1428,11 +1594,20 @@ async function extractRowFromDoc(doc, fileIndex, fileName, onProgress){
     const ocrMode = $('ocrMode').value;
     const wantsOcr = page && (ocrMode === 'always' || (ocrMode === 'auto' && !items.length));
 
+    let checkItems = null;   /* the second, independent reading of the page */
+
     if (wantsOcr){
       try {
         onProgress && onProgress('reading page ' + pageNum + ' with OCR');
-        items = await ocrPageToItems(page);
+        items = await ocrPageToItems(page, OCR_PAGE_SCALE, 0);
         usedOcr = true;
+
+        /* Read it again at a different size, so that anything the two
+           readings disagree about can be marked for checking. */
+        if ($('ocrDoubleCheck').checked && items.length){
+          onProgress && onProgress('checking page ' + pageNum + ' a second time');
+          checkItems = await ocrPageToItems(page, OCR_CHECK_PAGE_SCALE, OCR_CHECK_CONTRAST);
+        }
       } catch (err){
         /* OCR is unavailable (blocked, or it stalled). Say so on every cell
            that needed it, rather than pretending the boxes found nothing. */
@@ -1453,13 +1628,23 @@ async function extractRowFromDoc(doc, fileIndex, fileName, onProgress){
     }
 
     for (const field of fields){
-      const hits = itemsInsideBox(items, field);
-      const text = joinItemsInReadingOrder(hits);
-      row.cells[field.name] = {
+      const text = joinItemsInReadingOrder(itemsInsideBox(items, field));
+
+      const cell = {
         text  : text,
         status: text ? 'ok' : 'empty',
         source: usedOcr ? 'ocr' : 'text'
       };
+
+      /* Did the second reading of the page say the same thing? */
+      if (checkItems){
+        const second = joinItemsInReadingOrder(itemsInsideBox(checkItems, field));
+        if (normaliseForComparison(second) !== normaliseForComparison(text)){
+          cell.status = 'check';
+          cell.otherReading = second;
+        }
+      }
+      row.cells[field.name] = cell;
     }
   }
   return row;
@@ -1538,12 +1723,14 @@ function renderResultsTable(){
   thead.innerHTML = ''; tbody.innerHTML = '';
   if (!state.rows.length) return;
 
+  /* The file name goes last, so the columns you care about come first. */
   const headRow = thead.insertRow();
-  ['#', CSV_FILENAME_COLUMN].concat(state.fields.map(f => f.name)).forEach(label => {
-    const th = document.createElement('th');
-    th.textContent = label;
-    headRow.appendChild(th);
-  });
+  ['#'].concat(state.fields.map(f => f.name)).concat([CSV_FILENAME_COLUMN])
+    .forEach(label => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
 
   state.rows.forEach((row, rowIndex) => {
     const tr = tbody.insertRow();
@@ -1552,10 +1739,6 @@ function renderResultsTable(){
     const num = tr.insertCell();
     num.textContent = rowIndex + 1;
     num.style.cursor = 'default';
-
-    const nameCell = tr.insertCell();
-    nameCell.textContent = row.file;
-    nameCell.title = row.note ? (row.file + ' - ' + row.note) : row.file;
 
     state.fields.forEach(field => {
       const cell = row.cells[field.name] || { text:'', status:'empty' };
@@ -1567,8 +1750,15 @@ function renderResultsTable(){
         td.textContent = cell.text;
         td.className = cell.source === 'ocr' ? 'ocr' : '';
         td.title = cell.source === 'ocr'
-          ? cell.text + '  (read by OCR - worth checking)'
+          ? cell.text + '  (read by OCR, and confirmed by a second reading)'
           : cell.text;
+      } else if (cell.status === 'check'){
+        /* The value is shown, but the two readings of the page did not agree
+           about it - almost always a decimal point one of them could not see. */
+        td.textContent = cell.text;
+        td.className = 'check';
+        td.title = 'The two readings disagreed: "' + cell.text + '" and "' +
+                   (cell.otherReading || '(nothing)') + '". Check this one.';
       } else if (cell.status === 'empty'){
         td.className = 'empty';
         td.textContent = '';
@@ -1580,6 +1770,11 @@ function renderResultsTable(){
       }
       td.addEventListener('click', () => peekAtCell(rowIndex, field.id, td));
     });
+
+    const nameCell = tr.insertCell();
+    nameCell.textContent = row.file;
+    nameCell.title = row.note ? (row.file + ' - ' + row.note) : row.file;
+    nameCell.style.cursor = 'default';
   });
 }
 
@@ -1610,6 +1805,9 @@ async function peekAtCell(rowIndex, fieldId, tdElement){
   const info = $('previewInfo');
   let explanation;
   if (cell.status === 'ok')          explanation = cell.text;
+  else if (cell.status === 'check')  explanation = cell.text +
+        '     <-- the second reading of this page said "' +
+        (cell.otherReading || '(nothing)') + '", so please check it';
   else if (cell.status === 'empty')  explanation = '(nothing found inside this box)';
   else                               explanation = '(' + (CELL_ERROR_TEXT[cell.status] || 'problem') + ')';
   const howItWasRead = cell.source === 'ocr' ? ' by OCR' : '';
@@ -1649,17 +1847,20 @@ function csvEscape(value){
 
 $('btnExportCsv').addEventListener('click', () => {
   if (!state.rows.length) return;
-  const header = [CSV_FILENAME_COLUMN].concat(state.fields.map(f => f.name));
+  /* Columns come out in the order of the field list, with the file name last. */
+  const header = state.fields.map(f => f.name).concat([CSV_FILENAME_COLUMN]);
   const lines  = [header.map(csvEscape).join(',')];
 
   for (const row of state.rows){
-    const cells = [row.file].concat(state.fields.map(f => {
+    const values = state.fields.map(f => {
       const c = row.cells[f.name];
       if (!c) return '';
-      /* Unreadable cells say why; empty ones stay genuinely empty. */
-      return c.status === 'ok' || c.status === 'empty' ? c.text : (CELL_ERROR_TEXT[c.status] || '');
-    }));
-    lines.push(cells.map(csvEscape).join(','));
+      /* A flagged-for-checking cell still has a perfectly good value in it.
+         Unreadable cells say why; empty ones stay genuinely empty. */
+      if (c.status === 'ok' || c.status === 'empty' || c.status === 'check') return c.text;
+      return CELL_ERROR_TEXT[c.status] || '';
+    });
+    lines.push(values.concat([row.file]).map(csvEscape).join(','));
   }
 
   const text = (CSV_ADD_BOM ? '﻿' : '') + lines.join('\r\n') + '\r\n';
@@ -1715,7 +1916,7 @@ $('templatePicker').addEventListener('change', async (e) => {
       field.name = makeUniqueName(raw.name || 'Field', field.id);
     }
     state.rows = [];
-    state.selectedId = null;
+    state.selectedIds = [];
     renderFieldList();
     renderResultsTable();
     drawAllBoxes();
@@ -1744,10 +1945,14 @@ function updateStatus(extraMessage){
     const empties = state.rows.reduce((n, r) =>
       n + Object.values(r.cells).filter(c => c.status === 'empty').length, 0);
     const ocrCells = state.rows.reduce((n, r) =>
-      n + Object.values(r.cells).filter(c => c.source === 'ocr' && c.status === 'ok').length, 0);
+      n + Object.values(r.cells).filter(c => c.source === 'ocr' &&
+          (c.status === 'ok' || c.status === 'check')).length, 0);
+    const toCheck = state.rows.reduce((n, r) =>
+      n + Object.values(r.cells).filter(c => c.status === 'check').length, 0);
     let line = state.rows.length + ' row' + (state.rows.length === 1 ? '' : 's') + ' extracted';
     if (empties) line += ', ' + empties + ' empty cell' + (empties === 1 ? '' : 's');
     if (ocrCells) line += ', ' + ocrCells + ' read by OCR';
+    if (toCheck)  line += ', ' + toCheck + ' to check';
     bits.push(line);
     if (flagged) bits.push('<span class="bad">' + flagged + ' row(s) need manual checking</span>');
   }
@@ -1761,6 +1966,8 @@ function refreshButtons(){
   $('btnExportCsv').disabled      = state.running || !state.rows.length;
   $('btnExportTemplate').disabled = state.running || !state.fields.length;
   $('ocrMode').disabled           = state.running;
+  $('ocrDoubleCheck').disabled    = state.running;
+  updateSelectionNote();
   $('btnPrevPage').disabled       = !state.view.doc || state.view.pageNum <= 1;
   $('btnNextPage').disabled       = !state.view.doc || state.view.pageNum >= state.view.pageCount;
   updateStatus();
@@ -1769,7 +1976,7 @@ function refreshButtons(){
 $('btnClearAll').addEventListener('click', async () => {
   if (state.view.doc){ try { await state.view.doc.destroy(); } catch (e) {} }
   state.files = []; state.fields = []; state.rows = [];
-  state.selectedId = null; nextFieldId = 1; state.message = '';
+  state.selectedIds = []; nextFieldId = 1; state.message = '';
   if (state.ocr.worker){ try { await state.ocr.worker.terminate(); } catch (e) {} }
   state.ocr.worker = null; state.ocr.failure = null;
   state.view.doc = null; state.view.docKey = null;
@@ -1794,8 +2001,11 @@ window.addEventListener('resize', () => {
 /* Nothing is ever written to localStorage or any other browser storage:
    the exported template JSON file is the only place anything is kept. */
 
+$('ocrDoubleCheck').checked = OCR_DOUBLE_CHECK;
+
 setUpPdfJs().then(() => {
   renderFieldList();
+  updateSelectionNote();
   refreshButtons();
 });
 

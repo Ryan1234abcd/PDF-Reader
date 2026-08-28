@@ -10,8 +10,16 @@ It handles both kinds of spec sheet:
 * **Scanned PDFs** (the page is a picture; you cannot select any text in it) —
   read with built-in OCR. The `Scanned sheets` box in the toolbar is set to
   *OCR only when needed*, so OCR is used on a page only when there is no real
-  text on it. Cells filled by OCR are tinted **blue** in the table, because OCR
-  is very good but never perfect and those are the ones worth a glance.
+  text on it. Cells filled by OCR are tinted **blue**.
+
+  Every scanned page is read **twice**, at two different sizes, and any cell the
+  two readings disagree about is flagged orange. On a scan a decimal point is
+  only two or three dark pixels, so whether it survives depends on how the page
+  happens to be turned into pixels — that is how `5.0` becomes `50`. No single
+  setting gets it right every time (measured: some settings lose the point in
+  one value, others lose it in a different one), so instead of guessing, the
+  tool tells you which handful of cells to look at. It doubles the time on
+  scanned sheets; untick **Double-check scans** in the toolbar to turn it off.
 
 ## How to use it
 
@@ -31,17 +39,30 @@ It handles both kinds of spec sheet:
    column; include the unit in the box if you want the unit.
 5. **Adjust boxes** any time: drag them, drag the red corner handles to resize,
    select one and nudge it with the arrow keys (hold Shift for bigger steps),
-   rename it, type exact percentages, or delete it with the `×` button.
-6. **Press Run.** Every PDF is read in turn, with a progress bar. You get one row
+   rename it, or delete it with the `×` button. A box is only drawn on the page
+   it belongs to, so page 2 is not cluttered with page 1's boxes — use **View**
+   in the field list to jump to a field's page.
+6. **Order the columns.** The field list is the column order: top of the list
+   is the left-most column, and the file name is always last. Click a field
+   (Ctrl+click or Shift+click for several), then press ↑/↓ or use the
+   **Move up / Move down** buttons. The arrow keys do one of two jobs depending
+   on which half of the screen you last clicked in — nudge the box on the page
+   view, move the column in the field list — and the panel with an outline
+   round it is the one that has them.
+7. **Press Run.** Every PDF is read in turn, with a progress bar. You get one row
    per PDF and one column per field.
-7. **Check the results.** Click any cell and the page it came from is redrawn
+8. **Check the results.** Click any cell and the page it came from is redrawn
    with that box on it, and the text it pulled out is printed underneath.
    * A **yellow** cell means the box found nothing.
+   * An **orange** cell with a `?` means the two readings of that scanned page
+     disagreed about it — hover or click it to see both. This is nearly always
+     a decimal point one reading could not see, and these are the only cells
+     worth checking by hand.
    * A **red** cell means that page could not be read — the PDF is a scan with
      no text in it, the PDF has fewer pages than the template expects, or the
      file would not open at all. Those rows are flagged for you to do by hand.
-8. **Export CSV** for the schedule, and **Export Template** for the boxes.
-9. **Next time**: open the page, *Import Template*, drop the new folder, press
+9. **Export CSV** for the schedule, and **Export Template** for the boxes.
+10. **Next time**: open the page, *Import Template*, drop the new folder, press
    Run. No redrawing.
 
 The template JSON file is the only thing that is saved. The page deliberately
@@ -55,6 +76,7 @@ uses no browser storage, so keep that file somewhere you can find it.
 | Status line: *OCR engine could not start* | Your network blocked the OCR CDN. See the second set of instructions at the top of the HTML file — and read the warning there: Chrome will not load local OCR files from a double-clicked page, so that route needs a shortcut with `--allow-file-access-from-files`. |
 | A whole row is red | The PDF has fewer pages than the template expects, would not open, or is a scan that OCR could not read. The cell text says which. |
 | Everything is slow on scanned sheets | That is OCR: roughly 5 seconds per scanned page, and the first one also downloads about 15 MB of language data. Text PDFs stay instant. Lower `OCR_PAGE_SCALE` from 5 to 4 to trade a little accuracy for speed. |
+| An orange `?` cell | The two readings disagreed. Hover it to see both, click it to see the box on the page, and type the right value into the CSV. Usually a lost decimal point. |
 | An OCR value is slightly wrong | Click the cell to see the box on the page. Superscript footnote markers (the `(1)(2)` after a value on Güntner sheets) and `m³/h` are what OCR fumbles most; numbers and model codes come through reliably. Keeping the box to the number alone avoids most of it. |
 | One cell is yellow | The box missed. Click the cell to see the page, nudge or enlarge the box, and press Run again. |
 | A cell grabbed the neighbouring row or column | Make the box tighter. Matching is already strict — only text whose middle is inside counts — so this normally means the box genuinely overlaps the other row. |
