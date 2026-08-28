@@ -4,6 +4,15 @@ One file: **`pdf-spec-extractor.html`**. Double-click it. Nothing is installed,
 nothing is uploaded, no server runs — the PDFs are read inside your browser and
 never leave your machine.
 
+It handles both kinds of spec sheet:
+
+* **Text PDFs** — read directly, instantly and exactly.
+* **Scanned PDFs** (the page is a picture; you cannot select any text in it) —
+  read with built-in OCR. The `Scanned sheets` box in the toolbar is set to
+  *OCR only when needed*, so OCR is used on a page only when there is no real
+  text on it. Cells filled by OCR are tinted **blue** in the table, because OCR
+  is very good but never perfect and those are the ones worth a glance.
+
 ## How to use it
 
 1. **Drop your folder of PDFs** onto the grey box at the top (sub-folders are
@@ -38,9 +47,13 @@ uses no browser storage, so keep that file somewhere you can find it.
 | What you see | What to do |
 | --- | --- |
 | Red banner: *PDF library did not load* | Your network blocked the CDN. Follow the instructions in the comment at the very top of the HTML file: download `pdf.min.js` and `pdf.worker.min.js`, put them next to the HTML file, and change the two marked lines. |
-| A whole row is red | That PDF is a scan (an image, with no real text), or it has fewer pages than the template expects. This tool does no OCR, so handle those by hand. |
+| Status line: *OCR engine could not start* | Your network blocked the OCR CDN. See the second set of instructions at the top of the HTML file — and read the warning there: Chrome will not load local OCR files from a double-clicked page, so that route needs a shortcut with `--allow-file-access-from-files`. |
+| A whole row is red | The PDF has fewer pages than the template expects, would not open, or is a scan that OCR could not read. The cell text says which. |
+| Everything is slow on scanned sheets | That is OCR: roughly 5 seconds per scanned page, and the first one also downloads about 15 MB of language data. Text PDFs stay instant. Lower `OCR_PAGE_SCALE` from 5 to 4 to trade a little accuracy for speed. |
+| An OCR value is slightly wrong | Click the cell to see the box on the page. Superscript footnote markers (the `(1)(2)` after a value on Güntner sheets) and `m³/h` are what OCR fumbles most; numbers and model codes come through reliably. Draw the box to exclude the footnote if it bothers you. |
 | One cell is yellow | The box missed. Click the cell to see the page, nudge or enlarge the box, and press Run again. |
-| A cell grabbed the neighbouring column too | Make the box tighter, or raise `MIN_ITEM_OVERLAP` (near the top of the file) from `0` towards `0.5` so a text item must sit mostly inside the box to count. |
+| A cell grabbed the neighbouring column too | Make the box tighter, or raise `MIN_ITEM_OVERLAP` (near the top of the file) from `0` towards `0.5` so a text item must sit mostly inside the box to count. On scanned sheets the equivalent setting is `OCR_MIN_WORD_OVERLAP`. |
+| An OCR cell is empty although the value is plainly there | OCR returns chunky word rectangles. Enlarge the box a little, or lower `OCR_MIN_WORD_OVERLAP` from `0.3`. |
 | Wrapped lines run together oddly | Adjust `LINE_MERGE_TOLERANCE` (how far apart two bits of text can be and still count as one line) or `WORD_GAP_RATIO` (how wide a gap counts as a space). |
 | Boxes are slightly off on one supplier's sheets | Coordinates are stored as fractions of the page, so different paper sizes and rotated pages are handled. If a supplier has genuinely moved things, save a second template for them. |
 | Excel mangles accented characters | The CSV already carries the marker Excel needs; if your Excel is old, import it with *Data → From Text* and pick UTF-8. |

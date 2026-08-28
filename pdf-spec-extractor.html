@@ -17,6 +17,13 @@
     4. You export the table as CSV and the boxes as a template JSON file.
     5. Next time: import the template, drop the folder, press Run. No redrawing.
 
+  SCANNED (IMAGE-ONLY) SHEETS
+    Some suppliers send sheets that are pictures of a page rather than real
+    text - nothing in them can be selected or copied. Those are read with OCR
+    (optical character recognition), which is built in and switched to "Auto":
+    the text layer is used when there is one, and OCR is used only when there
+    is not. See the OCR notes further down if OCR cannot start.
+
   --------------------------------------------------------------------------
   IF THE PDF LIBRARY IS BLOCKED BY YOUR NETWORK  (READ THIS FIRST)
   --------------------------------------------------------------------------
@@ -46,6 +53,36 @@
                     const PDFJS_CMAP_URL = 'cmaps/';
 
     That is all. Nothing is installed; the files just sit next to this one.
+
+  --------------------------------------------------------------------------
+  THE SAME AGAIN, FOR THE OCR ENGINE (only needed for scanned sheets)
+  --------------------------------------------------------------------------
+  OCR uses Tesseract.js, also from a CDN. If it is blocked you will see
+  "OCR engine could not start" on the status line. To use local copies,
+  download these four files and put them next to this HTML file:
+
+      tesseract.min.js                  from https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/
+      worker.min.js                     from the same place (rename it tesseract-worker.min.js)
+      tesseract-core-simd-lstm.wasm.js  from https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/
+      eng.traineddata.gz                from https://tessdata.projectnaptha.com/4.0.0/
+
+  then change the TESSERACT_* constants in the CONFIG block to:
+
+      const TESSERACT_JS_URL     = 'tesseract.min.js';
+      const TESSERACT_WORKER_URL = 'tesseract-worker.min.js';
+      const TESSERACT_CORE_PATH  = './';
+      const TESSERACT_LANG_PATH  = './';
+
+  IMPORTANT - please read this bit, it will save you an hour:
+  Chrome will not let a double-clicked page load those local helper files
+  (it blocks file-to-file loading for security). The PDF side copes with this
+  on its own, but OCR does not: it will simply never finish. So local OCR
+  files only work if the page is opened in a Chrome started with the switch
+
+      chrome.exe --allow-file-access-from-files "C:\path\to\pdf-spec-extractor.html"
+
+  (make a desktop shortcut with that switch - nothing is installed). If your
+  network allows the CDN, none of this applies: leave the constants alone.
   --------------------------------------------------------------------------
 -->
 
@@ -66,6 +103,7 @@
   --box-selected:#c62828;     /* colour of the currently selected box    */
   --warn-bg:#fff6d6;          /* empty cell highlight                    */
   --error-bg:#ffdcdc;         /* failed cell / row highlight             */
+  --ocr-bg:#eaf3ff;           /* cell whose text came from OCR           */
 }
 *{box-sizing:border-box}
 body{
@@ -162,6 +200,7 @@ table{border-collapse:collapse; width:100%; font-size:12px}
 th,td{border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top}
 th{background:var(--panel); position:sticky; top:0; z-index:2; white-space:nowrap}
 td{max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer}
+td.ocr{background:var(--ocr-bg)}
 td.empty{background:var(--warn-bg)}
 td.error{background:var(--error-bg); color:#8b1a1a; font-style:italic}
 tr.rowFlagged td:first-child{background:var(--error-bg); font-weight:600}
@@ -199,6 +238,14 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
   <button type="button" id="btnImportTemplate">Import Template</button>
   <button type="button" id="btnExportTemplate" disabled>Export Template</button>
   <button type="button" id="btnRun" class="primary" disabled>Run</button>
+  <label title="What to do with scanned sheets that contain no real text">
+    Scanned sheets:
+    <select id="ocrMode">
+      <option value="auto" selected>OCR only when needed</option>
+      <option value="always">Always use OCR</option>
+      <option value="never">Never use OCR</option>
+    </select>
+  </label>
   <button type="button" id="btnExportCsv" disabled>Export CSV</button>
   <span class="spacer"></span>
   <button type="button" id="btnClearAll">Clear everything</button>
@@ -246,7 +293,8 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 <div id="tableWrap"><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
 <div class="hint">
   Click any cell to see that PDF page with the box drawn on it and the text that was pulled out.
-  Yellow&nbsp;= nothing found. Red&nbsp;= could not be read (no text layer, or the page does not exist).
+  Yellow&nbsp;= nothing found. Blue&nbsp;= read by OCR, so worth a glance.
+  Red&nbsp;= could not be read (the page does not exist, or OCR was off or unavailable).
 </div>
 
 <script>
@@ -265,6 +313,44 @@ const PDFJS_WORKER_URL =
    For a local copy use a folder next to this file, e.g. 'cmaps/'. */
 const PDFJS_CMAP_URL =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/';
+
+/* --- OCR, for scanned (image-only) sheets --------------------------------- */
+
+/* The OCR engine is only downloaded the first time a scanned page is met, so
+   ordinary text PDFs never pay for it. To use local copies of these four
+   files, see the OCR note in the comment at the top of this file. */
+const TESSERACT_JS_URL     = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+const TESSERACT_WORKER_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js';
+const TESSERACT_CORE_PATH  = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/';
+const TESSERACT_LANG_PATH  = 'https://tessdata.projectnaptha.com/4.0.0';
+const OCR_LANGUAGE         = 'eng';
+
+/* How big the page is drawn before it is handed to OCR. Higher is more
+   accurate and slower; 5 is about 360 dots per inch, which reads small
+   decimal points ("2.0" rather than "20") reliably on A4 sheets.
+   Drop to 4 if a very large batch makes the browser run short of memory. */
+const OCR_PAGE_SCALE = 5;
+
+/* Tesseract's page layout mode. 3 = "work the layout out for yourself",
+   which suits these two-column spec sheets. */
+const OCR_PAGE_SEG_MODE = '3';
+
+/* OCR returns chunky word rectangles, so a word must be at least this much
+   inside your box before it counts. Lower it if boxes drawn tightly around a
+   value keep coming back empty. */
+const OCR_MIN_WORD_OVERLAP = 0.3;
+
+/* OCR is given up on after these many milliseconds. This matters: when the
+   engine's files cannot be loaded it stalls silently rather than failing, and
+   without a time limit Run would appear to hang for ever. */
+const OCR_STARTUP_TIMEOUT_MS = 180000;   /* first use downloads ~15 MB       */
+const OCR_PAGE_TIMEOUT_MS    = 120000;   /* per page                         */
+
+/* The OCR language file is normally re-downloaded each session. Set this to
+   true to let the engine keep it in the browser's cache instead. It is off by
+   default because this page keeps nothing in browser storage, and because a
+   double-clicked page is not allowed to use that storage anyway. */
+const OCR_CACHE_LANGUAGE = false;
 
 /* --- extraction tuning --------------------------------------------------- */
 
@@ -304,7 +390,9 @@ const TEMPLATE_VERSION    = 1;
    genuinely empty - they are highlighted instead of being filled with words. */
 const CELL_ERROR_TEXT = {
   nopage : 'no such page',
-  notext : 'no text layer',
+  notext : 'scanned page, OCR off',
+  ocrempty:'OCR found nothing',
+  ocrfail: 'OCR unavailable',
   docfail: 'could not open PDF'
 };
 
@@ -332,7 +420,14 @@ const state = {
   },
 
   running: false,
-  message: ''    /* the one-off note shown at the end of the status line */
+  message: '',   /* the one-off note shown at the end of the status line */
+
+  /* The OCR engine is started once and then re-used for the whole batch. */
+  ocr: {
+    scriptPromise: null,  /* the download of tesseract.js                    */
+    worker       : null,  /* the running engine                              */
+    failure      : null   /* set once it is known not to work, so we stop    */
+  }                       /* trying (and waiting) for every remaining file   */
 };
 
 let nextFieldId = 1;   /* simple counter used to give every box a unique id */
@@ -1053,11 +1148,153 @@ function joinItemsInReadingOrder(items){
   return normaliseWhitespace(lineStrings.join(' '));
 }
 
+/* ===========================================================================
+   9b. OCR  -  reading sheets that are pictures rather than text
+
+   Some suppliers send scans: the page is one big image and there is no text
+   in the file at all. For those we draw the page at high resolution and hand
+   it to Tesseract, which gives back every word it can see together with the
+   rectangle it sits in. Those rectangles are converted into exactly the same
+   fractions-of-the-page shape that the text layer produces, so from here on
+   the rest of the program cannot tell the difference and all the same box,
+   reading-order and joining rules apply.
+   =========================================================================== */
+
+/** Reject rather than wait for ever. A stalled OCR engine never errors by
+    itself, so every OCR step is wrapped in one of these. */
+function withTimeout(promise, milliseconds, whatFailed){
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error(whatFailed + ' timed out after ' +
+                             Math.round(milliseconds / 1000) + ' seconds')),
+      milliseconds))
+  ]);
+}
+
+/** Download the OCR library, once, only when it is actually needed. */
+function loadTesseractScript(){
+  if (state.ocr.scriptPromise) return state.ocr.scriptPromise;
+
+  state.ocr.scriptPromise = new Promise((resolve, reject) => {
+    if (typeof Tesseract !== 'undefined') return resolve();
+    const script = document.createElement('script');
+    script.src = TESSERACT_JS_URL;
+    script.onload  = () => (typeof Tesseract !== 'undefined')
+      ? resolve()
+      : reject(new Error('the OCR library loaded but did not start'));
+    script.onerror = () => reject(new Error('the OCR library could not be downloaded'));
+    document.head.appendChild(script);
+  });
+  return state.ocr.scriptPromise;
+}
+
+/**
+ * Start the OCR engine, or hand back the one already running.
+ * Once it has failed we remember that and stop trying, so a batch of 200 PDFs
+ * does not sit through the same three-minute wait 200 times.
+ */
+async function startOcrEngine(){
+  if (state.ocr.failure) throw new Error(state.ocr.failure);
+  if (state.ocr.worker)  return state.ocr.worker;
+
+  try {
+    updateStatus('Starting the OCR engine (the first scanned page also downloads the language file)…');
+    await withTimeout(loadTesseractScript(), OCR_STARTUP_TIMEOUT_MS, 'Downloading the OCR library');
+
+    const worker = await withTimeout(
+      Tesseract.createWorker(OCR_LANGUAGE, 1, {
+        workerPath  : TESSERACT_WORKER_URL,
+        corePath    : TESSERACT_CORE_PATH,
+        langPath    : TESSERACT_LANG_PATH,
+        cacheMethod : OCR_CACHE_LANGUAGE ? 'write' : 'none',
+        gzip        : true,
+        logger      : () => {}
+      }),
+      OCR_STARTUP_TIMEOUT_MS, 'Starting the OCR engine');
+
+    /* Telling Tesseract the true resolution measurably improves its reading
+       of small print such as the decimal point in "2.0". */
+    await worker.setParameters({
+      tessedit_pageseg_mode: OCR_PAGE_SEG_MODE,
+      user_defined_dpi     : String(Math.round(72 * OCR_PAGE_SCALE))
+    });
+
+    state.ocr.worker = worker;
+    updateStatus('');
+    return worker;
+  } catch (err){
+    state.ocr.failure =
+      'OCR engine could not start (' + err.message + '). ' +
+      'If your network blocks the CDN, see the OCR note at the top of this file.';
+    throw new Error(state.ocr.failure);
+  }
+}
+
+/** Draw one page at OCR resolution onto a canvas that is not on screen. */
+async function renderPageForOcr(page){
+  const viewport = page.getViewport({ scale: OCR_PAGE_SCALE });
+  const canvas = document.createElement('canvas');
+  canvas.width  = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  const ctx = canvas.getContext('2d');
+  /* White behind the page: OCR reads dark-on-light far better than
+     dark-on-transparent, which some browsers hand over as dark-on-black. */
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+  return canvas;
+}
+
+/**
+ * OCR one page and return its words in the same shape the text layer uses:
+ * { text, left, top, right, bottom, height }, all fractions of the page.
+ */
+async function ocrPageToItems(page){
+  const worker = await startOcrEngine();
+  const canvas = await renderPageForOcr(page);
+
+  try {
+    const result = await withTimeout(
+      worker.recognize(canvas, {}, { blocks: true, text: true }),
+      OCR_PAGE_TIMEOUT_MS, 'Reading a page with OCR');
+
+    /* Different versions of the engine put the words in different places, so
+       look in both: a flat list, or nested inside blocks and lines. */
+    const data = result.data;
+    let words = [];
+    if (data.words && data.words.length){
+      words = data.words;
+    } else {
+      (data.blocks || []).forEach(block =>
+        (block.paragraphs || []).forEach(para =>
+          (para.lines || []).forEach(line => {
+            words = words.concat(line.words || []);
+          })));
+    }
+
+    return words
+      .filter(w => w && w.text && w.text.trim().length && w.bbox)
+      .map(w => ({
+        text  : w.text,
+        left  : w.bbox.x0 / canvas.width,
+        right : w.bbox.x1 / canvas.width,
+        top   : w.bbox.y0 / canvas.height,
+        bottom: w.bbox.y1 / canvas.height,
+        height: (w.bbox.y1 - w.bbox.y0) / canvas.height
+      }));
+  } finally {
+    /* Hand the memory back straight away - these canvases are large. */
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
 /**
  * Apply every field to one open PDF and return the finished row.
  * Never throws: anything that goes wrong becomes a flagged cell instead.
  */
-async function extractRowFromDoc(doc, fileIndex, fileName){
+async function extractRowFromDoc(doc, fileIndex, fileName, onProgress){
   const row = { file: fileName, fileIndex: fileIndex, cells: {}, flagged: false };
 
   /* Work page by page so each page is only fetched and read once. */
@@ -1075,27 +1312,54 @@ async function extractRowFromDoc(doc, fileIndex, fileName){
       continue;
     }
 
+    let page = null;
     let items = [];
-    let viewport = null;
+    let usedOcr = false;
+
+    /* First try the text layer - instant, and exact when it is there. */
     try {
-      const page = await doc.getPage(pageNum);
-      viewport = page.getViewport({ scale: 1 });
+      page = await doc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1 });
       const content = await page.getTextContent();
       items = content.items
         .filter(it => typeof it.str === 'string' && it.str.length)
         .map(it => textItemToRect(it, viewport));
     } catch (err){
-      for (const f of fields) row.cells[f.name] = { text:'', status:'notext' };
+      items = [];
+    }
+
+    /* A scanned sheet has no text at all, so fall back to OCR - unless the
+       user has turned OCR off, or asked for it to be used on everything. */
+    const ocrMode = $('ocrMode').value;
+    const wantsOcr = page && (ocrMode === 'always' || (ocrMode === 'auto' && !items.length));
+
+    if (wantsOcr){
+      try {
+        onProgress && onProgress('reading page ' + pageNum + ' with OCR');
+        items = await ocrPageToItems(page);
+        usedOcr = true;
+      } catch (err){
+        /* OCR is unavailable (blocked, or it stalled). Say so on every cell
+           that needed it, rather than pretending the boxes found nothing. */
+        for (const f of fields) row.cells[f.name] = { text:'', status:'ocrfail' };
+        row.flagged = true;
+        updateStatus(state.ocr.failure || err.message);
+        continue;
+      }
+    }
+
+    /* Still nothing. Either it is an image-only page and OCR is switched off,
+       or OCR ran and could not see a single word on it - say which. */
+    if (!items.length){
+      const why = usedOcr ? 'ocrempty' : 'notext';
+      for (const f of fields) row.cells[f.name] = { text:'', status:why };
       row.flagged = true;
       continue;
     }
 
-    /* A scanned/image-only page yields nothing. Flag it - we do not do OCR. */
-    if (!items.length){
-      for (const f of fields) row.cells[f.name] = { text:'', status:'notext' };
-      row.flagged = true;
-      continue;
-    }
+    /* OCR hands back chunky word rectangles, so it needs a firmer overlap
+       rule than the text layer, where each item is a tight little box. */
+    const minOverlap = usedOcr ? OCR_MIN_WORD_OVERLAP : MIN_ITEM_OVERLAP;
 
     for (const field of fields){
       const target = {
@@ -1104,9 +1368,13 @@ async function extractRowFromDoc(doc, fileIndex, fileName){
         right : field.x + field.w + BOX_TOLERANCE,
         bottom: field.y + field.h + BOX_TOLERANCE
       };
-      const hits = items.filter(it => overlapFraction(it, target) > MIN_ITEM_OVERLAP);
+      const hits = items.filter(it => overlapFraction(it, target) > minOverlap);
       const text = joinItemsInReadingOrder(hits);
-      row.cells[field.name] = { text: text, status: text ? 'ok' : 'empty' };
+      row.cells[field.name] = {
+        text  : text,
+        status: text ? 'ok' : 'empty',
+        source: usedOcr ? 'ocr' : 'text'
+      };
     }
   }
   return row;
@@ -1145,7 +1413,10 @@ async function runExtraction(){
     let doc = null;
     try {
       doc = await openPdf(entry.file);
-      const row = await extractRowFromDoc(doc, i, entry.name);
+      const row = await extractRowFromDoc(doc, i, entry.name, (note) => {
+        /* OCR is slow enough that the status line must say what it is doing. */
+        updateStatus(entry.name + ': ' + note);
+      });
       state.rows.push(row);
     } catch (err){
       /* A file we cannot open at all still gets a row, clearly flagged. */
@@ -1162,8 +1433,10 @@ async function runExtraction(){
 
   state.running = false;
   renderResultsTable();
+  /* Keep the explanation on screen if OCR could not be used - the cells only
+     say "OCR unavailable", which does not tell you what to do about it. */
+  updateStatus(state.ocr.failure || '');
   refreshButtons();
-  updateStatus('');
 
   /* Put a page back on screen so the viewer is usable again. */
   if (state.files.length) showPdfPage(state.view.fileIndex, state.view.pageNum);
@@ -1207,7 +1480,10 @@ function renderResultsTable(){
 
       if (cell.status === 'ok'){
         td.textContent = cell.text;
-        td.title = cell.text;
+        td.className = cell.source === 'ocr' ? 'ocr' : '';
+        td.title = cell.source === 'ocr'
+          ? cell.text + '  (read by OCR - worth checking)'
+          : cell.text;
       } else if (cell.status === 'empty'){
         td.className = 'empty';
         td.textContent = '';
@@ -1251,6 +1527,7 @@ async function peekAtCell(rowIndex, fieldId, tdElement){
   if (cell.status === 'ok')          explanation = cell.text;
   else if (cell.status === 'empty')  explanation = '(nothing found inside this box)';
   else                               explanation = '(' + (CELL_ERROR_TEXT[cell.status] || 'problem') + ')';
+  const howItWasRead = cell.source === 'ocr' ? ' by OCR' : '';
 
   info.style.display = 'block';
   info.innerHTML = '';
@@ -1259,7 +1536,7 @@ async function peekAtCell(rowIndex, fieldId, tdElement){
                     escapeHtml(field.name) + '</b>, page ' + field.page;
   const line2 = document.createElement('div');
   line2.style.marginTop = '4px';
-  line2.textContent = 'Extracted: ' + explanation;
+  line2.textContent = 'Extracted' + howItWasRead + ': ' + explanation;
   info.append(line1, line2);
 }
 
@@ -1381,8 +1658,11 @@ function updateStatus(extraMessage){
     const flagged = state.rows.filter(r => r.flagged).length;
     const empties = state.rows.reduce((n, r) =>
       n + Object.values(r.cells).filter(c => c.status === 'empty').length, 0);
+    const ocrCells = state.rows.reduce((n, r) =>
+      n + Object.values(r.cells).filter(c => c.source === 'ocr' && c.status === 'ok').length, 0);
     let line = state.rows.length + ' row' + (state.rows.length === 1 ? '' : 's') + ' extracted';
     if (empties) line += ', ' + empties + ' empty cell' + (empties === 1 ? '' : 's');
+    if (ocrCells) line += ', ' + ocrCells + ' read by OCR';
     bits.push(line);
     if (flagged) bits.push('<span class="bad">' + flagged + ' row(s) need manual checking</span>');
   }
@@ -1395,6 +1675,7 @@ function refreshButtons(){
   $('btnRun').disabled            = state.running || !state.files.length || !state.fields.length;
   $('btnExportCsv').disabled      = state.running || !state.rows.length;
   $('btnExportTemplate').disabled = state.running || !state.fields.length;
+  $('ocrMode').disabled           = state.running;
   $('btnPrevPage').disabled       = !state.view.doc || state.view.pageNum <= 1;
   $('btnNextPage').disabled       = !state.view.doc || state.view.pageNum >= state.view.pageCount;
   updateStatus();
@@ -1404,6 +1685,8 @@ $('btnClearAll').addEventListener('click', async () => {
   if (state.view.doc){ try { await state.view.doc.destroy(); } catch (e) {} }
   state.files = []; state.fields = []; state.rows = [];
   state.selectedId = null; nextFieldId = 1; state.message = '';
+  if (state.ocr.worker){ try { await state.ocr.worker.terminate(); } catch (e) {} }
+  state.ocr.worker = null; state.ocr.failure = null;
   state.view.doc = null; state.view.docKey = null;
   state.view.pageNum = 1; state.view.pageCount = 0;
   canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
