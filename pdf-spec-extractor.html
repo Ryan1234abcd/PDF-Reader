@@ -1,0 +1,1436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Spec Sheet Extractor</title>
+
+<!--
+================================================================================
+  PDF SPEC SHEET EXTRACTOR  -  single file, no install, no server.
+================================================================================
+
+  WHAT IT DOES
+    1. You drop a folder of PDF spec sheets onto the page.
+    2. You draw boxes on the page image and name them (one box = one column).
+    3. You press Run. Every PDF is read and one row of data is produced per PDF.
+    4. You export the table as CSV and the boxes as a template JSON file.
+    5. Next time: import the template, drop the folder, press Run. No redrawing.
+
+  --------------------------------------------------------------------------
+  IF THE PDF LIBRARY IS BLOCKED BY YOUR NETWORK  (READ THIS FIRST)
+  --------------------------------------------------------------------------
+  This page loads PDF.js from a public CDN (the two <script>/URL lines below).
+  If your work network blocks CDNs you will see a red "PDF library did not
+  load" banner. To fix it WITHOUT installing anything:
+
+    STEP 1. On any machine with internet, download these two files from
+              https://cdnjs.com/libraries/pdf.js/3.11.174
+            (or from https://mozilla.github.io/pdf.js/getting_started/ )
+
+              pdf.min.js
+              pdf.worker.min.js
+
+    STEP 2. Put both files in the SAME FOLDER as this HTML file.
+
+    STEP 3. Change the two marked lines below:
+
+              (a) the <script src="..."> tag a few lines down:
+                    <script src="pdf.min.js"></script>
+
+              (b) the PDFJS_WORKER_URL constant in the CONFIG block:
+                    const PDFJS_WORKER_URL = 'pdf.worker.min.js';
+
+            and, if you also handle Chinese/Japanese/Korean spec sheets,
+            download the "cmaps" folder alongside and set:
+                    const PDFJS_CMAP_URL = 'cmaps/';
+
+    That is all. Nothing is installed; the files just sit next to this one.
+  --------------------------------------------------------------------------
+-->
+
+<!-- (a) PDF.js main library. Swap this src for "pdf.min.js" to run locally. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+<style>
+/* ---------------------------------------------------------------------------
+   Plain, functional styling. This is a work tool, not a showcase.
+   --------------------------------------------------------------------------- */
+:root{
+  --line:#c8ccd2;
+  --ink:#1b1f24;
+  --muted:#5c6672;
+  --panel:#f6f7f9;
+  --accent:#0b63ce;
+  --box:#0b63ce;              /* colour of a normal drawn box            */
+  --box-selected:#c62828;     /* colour of the currently selected box    */
+  --warn-bg:#fff6d6;          /* empty cell highlight                    */
+  --error-bg:#ffdcdc;         /* failed cell / row highlight             */
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:14px;
+  font:13px/1.45 "Segoe UI", Arial, Helvetica, sans-serif;
+  color:var(--ink); background:#fff;
+}
+h1{font-size:17px; margin:0 0 10px}
+h2{font-size:13px; margin:0 0 6px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted)}
+button{
+  font:inherit; padding:5px 11px; border:1px solid var(--line);
+  background:#fff; border-radius:3px; cursor:pointer;
+}
+button:hover:not(:disabled){background:#eef2f7}
+button:disabled{opacity:.45; cursor:default}
+button.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+button.primary:hover:not(:disabled){background:#0a55b0}
+input[type=text], input[type=number]{
+  font:inherit; padding:3px 5px; border:1px solid var(--line); border-radius:3px;
+}
+.toolbar{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px}
+.spacer{flex:1}
+
+/* --- drop zone ---------------------------------------------------------- */
+#dropZone{
+  border:2px dashed var(--line); border-radius:5px; padding:14px;
+  text-align:center; color:var(--muted); background:var(--panel);
+  margin-bottom:10px; cursor:pointer;
+}
+#dropZone.hot{border-color:var(--accent); background:#e8f1fd; color:var(--accent)}
+
+/* --- status ------------------------------------------------------------- */
+#statusLine{
+  padding:6px 9px; background:var(--panel); border:1px solid var(--line);
+  border-radius:3px; margin-bottom:10px; font-variant-numeric:tabular-nums;
+}
+#statusLine .bad{color:#b3261e; font-weight:600}
+#progressOuter{height:6px; background:#e2e6eb; border-radius:3px; margin-top:6px; display:none}
+#progressInner{height:100%; width:0%; background:var(--accent); border-radius:3px}
+#banner{
+  display:none; padding:9px 11px; border:1px solid #d33; background:#ffecec;
+  color:#8b1a1a; border-radius:3px; margin-bottom:10px; white-space:pre-wrap;
+}
+
+/* --- main two-column layout --------------------------------------------- */
+.main{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap}
+.viewer{flex:1 1 620px; min-width:340px; overflow-x:auto}
+.side{flex:0 1 340px; min-width:280px}
+
+/* --- the page canvas and the box overlay sitting exactly on top of it ---- */
+#canvasWrap{
+  position:relative; display:inline-block; line-height:0;
+  border:1px solid var(--line); background:#fff;
+}
+#pageCanvas{display:block}
+#boxLayer{position:absolute; inset:0; cursor:crosshair}
+.fieldBox{
+  position:absolute; border:2px solid var(--box);
+  background:rgba(11,99,206,.10); cursor:move;
+}
+.fieldBox.selected{border-color:var(--box-selected); background:rgba(198,40,40,.12); z-index:5}
+.fieldBox .tag{
+  position:absolute; top:-17px; left:-2px; font-size:10px; line-height:14px;
+  padding:0 4px; background:var(--box); color:#fff; white-space:nowrap;
+  border-radius:2px; font-family:"Segoe UI",Arial,sans-serif;
+}
+.fieldBox.selected .tag{background:var(--box-selected)}
+.fieldBox .handle{
+  position:absolute; width:9px; height:9px; background:#fff;
+  border:1px solid var(--box-selected);
+}
+.fieldBox.offpage{opacity:.30}          /* box belongs to another page */
+#drawGhost{position:absolute; border:2px dashed var(--box-selected); background:rgba(198,40,40,.08); display:none}
+
+/* --- field list --------------------------------------------------------- */
+.fieldRow{
+  border:1px solid var(--line); border-radius:3px; padding:6px;
+  margin-bottom:6px; background:#fff;
+}
+.fieldRow.selected{border-color:var(--box-selected); background:#fff5f5}
+.fieldRow .top{display:flex; gap:6px; align-items:center}
+.fieldRow .top input[type=text]{flex:1; min-width:0}
+.fieldRow .coords{
+  margin-top:5px; display:grid; grid-template-columns:repeat(4,1fr); gap:4px;
+  font-size:11px; color:var(--muted);
+}
+.fieldRow .coords label{display:flex; flex-direction:column; gap:2px}
+.fieldRow .coords input{width:100%}
+.hint{color:var(--muted); font-size:12px; margin:4px 0 10px}
+
+/* --- results table ------------------------------------------------------ */
+#tableWrap{margin-top:16px; overflow:auto; max-height:52vh; border:1px solid var(--line)}
+table{border-collapse:collapse; width:100%; font-size:12px}
+th,td{border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top}
+th{background:var(--panel); position:sticky; top:0; z-index:2; white-space:nowrap}
+td{max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer}
+td.empty{background:var(--warn-bg)}
+td.error{background:var(--error-bg); color:#8b1a1a; font-style:italic}
+tr.rowFlagged td:first-child{background:var(--error-bg); font-weight:600}
+td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
+
+/* --- preview panel ------------------------------------------------------ */
+#previewInfo{
+  margin-top:8px; padding:7px 9px; background:var(--panel);
+  border:1px solid var(--line); border-radius:3px; font-size:12px;
+  white-space:pre-wrap; word-break:break-word; display:none;
+}
+#previewInfo b{font-weight:600}
+.pager{display:flex; gap:6px; align-items:center; margin:8px 0}
+</style>
+</head>
+<body>
+
+<h1>PDF Spec Sheet Extractor</h1>
+
+<div id="banner"></div>
+
+<!-- Top: drop zone + the four buttons ------------------------------------- -->
+<div id="dropZone">
+  <b>Drop a folder of PDFs here</b> (or a multi-file selection) &mdash; or click to choose files
+  <input type="file" id="filePicker" accept="application/pdf,.pdf" multiple webkitdirectory style="display:none">
+  <input type="file" id="filePicker2" accept="application/pdf,.pdf" multiple style="display:none">
+  <input type="file" id="templatePicker" accept="application/json,.json" style="display:none">
+  <div style="margin-top:6px">
+    <button type="button" id="btnPickFolder">Choose folder&hellip;</button>
+    <button type="button" id="btnPickFiles">Choose files&hellip;</button>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button type="button" id="btnImportTemplate">Import Template</button>
+  <button type="button" id="btnExportTemplate" disabled>Export Template</button>
+  <button type="button" id="btnRun" class="primary" disabled>Run</button>
+  <button type="button" id="btnExportCsv" disabled>Export CSV</button>
+  <span class="spacer"></span>
+  <button type="button" id="btnClearAll">Clear everything</button>
+</div>
+
+<div id="statusLine">
+  <span id="statusText">No PDFs loaded. No template loaded.</span>
+  <div id="progressOuter"><div id="progressInner"></div></div>
+</div>
+
+<div class="main">
+  <!-- LEFT: the page image you draw on -->
+  <div class="viewer">
+    <h2>Page view <span id="viewerSubject" style="text-transform:none;font-weight:400"></span></h2>
+    <div class="pager">
+      <button type="button" id="btnPrevPage">&larr; Prev</button>
+      <span id="pageLabel">page &ndash; / &ndash;</span>
+      <button type="button" id="btnNextPage">Next &rarr;</button>
+      <span style="width:12px"></span>
+      <button type="button" id="btnZoomOut">&minus;</button>
+      <button type="button" id="btnZoomIn">+</button>
+      <span id="zoomLabel">100%</span>
+    </div>
+    <div id="canvasWrap">
+      <canvas id="pageCanvas" width="10" height="10"></canvas>
+      <div id="boxLayer"><div id="drawGhost"></div></div>
+    </div>
+    <div id="previewInfo"></div>
+  </div>
+
+  <!-- RIGHT: the list of fields (columns) -->
+  <div class="side">
+    <h2>Fields / columns</h2>
+    <div class="hint">
+      Drag on the page image to draw a box, then type its name.
+      A box belongs to the page number shown beside it.
+      Select a box and use the arrow keys to nudge it (hold Shift for bigger steps).
+    </div>
+    <div id="fieldList"></div>
+    <div class="hint" id="fieldEmptyHint">No fields yet.</div>
+  </div>
+</div>
+
+<h2 style="margin-top:18px">Results</h2>
+<div id="tableWrap"><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
+<div class="hint">
+  Click any cell to see that PDF page with the box drawn on it and the text that was pulled out.
+  Yellow&nbsp;= nothing found. Red&nbsp;= could not be read (no text layer, or the page does not exist).
+</div>
+
+<script>
+"use strict";
+
+/* ===========================================================================
+   1. CONFIGURATION  -  every tunable knob lives here.
+   =========================================================================== */
+
+/* (b) The PDF.js background worker. Change to 'pdf.worker.min.js' to run from
+       a local copy sitting next to this HTML file (see the note at the top). */
+const PDFJS_WORKER_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+/* Character maps, only needed for Chinese / Japanese / Korean documents.
+   For a local copy use a folder next to this file, e.g. 'cmaps/'. */
+const PDFJS_CMAP_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/';
+
+/* --- extraction tuning --------------------------------------------------- */
+
+/* A text item counts as "inside" a box if their rectangles overlap. This grows
+   every box slightly first, as a fraction of the page size, so a word sitting a
+   hair outside the line you drew is still caught. 0.004 = 0.4% of the page. */
+const BOX_TOLERANCE = 0.004;
+
+/* How much of a text item must fall inside the box before it is accepted.
+   0 = any overlap at all counts (the default, and the most forgiving).
+   Raise towards 0.5 if boxes keep catching text from the neighbouring column. */
+const MIN_ITEM_OVERLAP = 0;
+
+/* Two text items are treated as being on the SAME LINE when their vertical
+   positions are within this fraction of the page height of each other. */
+const LINE_MERGE_TOLERANCE = 0.006;
+
+/* Within a line, a gap wider than this (as a multiple of the text height)
+   is treated as a word space rather than as letters of the same word. */
+const WORD_GAP_RATIO = 0.22;
+
+/* --- drawing tuning ------------------------------------------------------ */
+const MIN_BOX_SIZE_PX   = 6;     /* smaller drags are ignored as stray clicks */
+const NUDGE_STEP        = 0.001; /* arrow key step, as a fraction of the page */
+const NUDGE_STEP_BIG    = 0.01;  /* with Shift held down                      */
+const DEFAULT_ZOOM      = 1.0;   /* 1.0 = fit the page to the panel width     */
+const ZOOM_STEP         = 0.25;
+const MAX_RENDER_SCALE  = 4;     /* safety cap so huge zoom cannot hang       */
+
+/* --- output tuning ------------------------------------------------------- */
+const CSV_FILENAME_COLUMN = 'File Name';
+const CSV_ADD_BOM         = true;  /* helps Excel open UTF-8 correctly        */
+const TEMPLATE_FORMAT     = 'pdf-spec-extractor-template';
+const TEMPLATE_VERSION    = 1;
+
+/* Text written into a cell that could not be read at all. Empty matches stay
+   genuinely empty - they are highlighted instead of being filled with words. */
+const CELL_ERROR_TEXT = {
+  nopage : 'no such page',
+  notext : 'no text layer',
+  docfail: 'could not open PDF'
+};
+
+
+/* ===========================================================================
+   2. APPLICATION STATE  -  everything the page currently knows.
+   =========================================================================== */
+
+const state = {
+  files      : [],    /* [{name, file}] every PDF the user dropped            */
+  fields     : [],    /* [{id, name, page, x, y, w, h}] fractions 0..1        */
+  rows       : [],    /* one result row per PDF, built by Run                 */
+  selectedId : null,  /* id of the field box currently selected               */
+
+  /* what the canvas is showing right now */
+  view: {
+    fileIndex : 0,
+    pageNum   : 1,
+    pageCount : 0,
+    doc       : null,   /* the open PDFDocumentProxy                          */
+    docKey    : null,   /* which file that doc belongs to                     */
+    zoom      : DEFAULT_ZOOM,
+    baseW     : 0,      /* page width  in PDF points, at scale 1, rotated     */
+    baseH     : 0       /* page height in PDF points, at scale 1, rotated     */
+  },
+
+  running: false,
+  message: ''    /* the one-off note shown at the end of the status line */
+};
+
+let nextFieldId = 1;   /* simple counter used to give every box a unique id */
+
+
+/* ===========================================================================
+   3. SMALL HELPERS
+   =========================================================================== */
+
+const $ = (id) => document.getElementById(id);
+
+/** Keep a number inside a range. */
+function clamp(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
+
+/** Collapse all runs of whitespace to single spaces and trim the ends. */
+function normaliseWhitespace(s){
+  return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+}
+
+/** Show a red banner at the top of the page (used for real problems only). */
+function showBanner(message){
+  const b = $('banner');
+  b.textContent = message;
+  b.style.display = 'block';
+}
+
+/** Let the browser repaint - used inside long loops so the page never freezes. */
+function letBrowserBreathe(){
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/** Trigger a download of some text as a file, without any server. */
+function downloadTextFile(filename, text, mimeType){
+  const blob = new Blob([text], { type: mimeType || 'text/plain;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  /* Give the browser a moment to start the download before releasing the URL. */
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/** Today's date as 2026-08-28, used in suggested export file names. */
+function todayStamp(){
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+
+/* ===========================================================================
+   4. STARTING PDF.js
+   Loads the background worker. If the CDN is unreachable the page says so
+   plainly instead of failing silently.
+   =========================================================================== */
+
+async function setUpPdfJs(){
+  if (typeof pdfjsLib === 'undefined'){
+    showBanner(
+      'PDF library did not load.\n\n' +
+      'Your network has probably blocked the CDN. Open this file in a text ' +
+      'editor and follow the instructions in the comment at the very top: ' +
+      'download pdf.min.js and pdf.worker.min.js, put them next to this file, ' +
+      'and change the two marked lines. Nothing needs to be installed.'
+    );
+    return false;
+  }
+
+  /* Browsers refuse to start a worker directly from another website, so we
+     fetch the worker's code and start it from a local blob instead. If that
+     is blocked too we hand PDF.js the plain URL; it then falls back to doing
+     the work on the main thread - slower, but everything still works. */
+  try {
+    const res = await fetch(PDFJS_WORKER_URL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const code = await res.text();
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+  } catch (err){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  }
+  return true;
+}
+
+/**
+ * Open one PDF file with PDF.js.
+ * Note on locked-down PDFs: some suppliers set permission flags that stop
+ * Acrobat copying text. Those flags are advisory and PDF.js ignores them,
+ * so we deliberately do nothing special here - such files read fine.
+ */
+async function openPdf(file){
+  const buffer = await file.arrayBuffer();
+  const task = pdfjsLib.getDocument({
+    data: buffer,
+    cMapUrl: PDFJS_CMAP_URL,
+    cMapPacked: true,
+    /* An encrypted-but-not-password-protected file still opens; this simply
+       stops PDF.js prompting for a password on odd files. */
+    password: '',
+    isEvalSupported: false
+  });
+  return await task.promise;
+}
+
+
+/* ===========================================================================
+   5. TAKING IN FILES  -  drag & drop of a folder, or a file picker.
+   =========================================================================== */
+
+const dropZone = $('dropZone');
+
+['dragenter','dragover'].forEach(ev =>
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.add('hot');
+  })
+);
+['dragleave','drop'].forEach(ev =>
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.remove('hot');
+  })
+);
+
+dropZone.addEventListener('drop', async (e) => {
+  const items = e.dataTransfer && e.dataTransfer.items;
+  let files = [];
+
+  /* A dropped FOLDER only appears through the "entries" interface, so use it
+     when available and walk every sub-folder. Otherwise fall back to the
+     plain file list, which covers multi-file selections. */
+  if (items && items.length && items[0].webkitGetAsEntry){
+    const entries = [];
+    for (let i = 0; i < items.length; i++){
+      const entry = items[i].webkitGetAsEntry();
+      if (entry) entries.push(entry);
+    }
+    for (const entry of entries) await collectPdfsFromEntry(entry, files);
+  }
+  if (!files.length && e.dataTransfer.files) files = Array.from(e.dataTransfer.files);
+
+  addFiles(files);
+});
+
+/** Walk a dropped folder tree and collect every .pdf inside it. */
+async function collectPdfsFromEntry(entry, out){
+  if (entry.isFile){
+    const file = await new Promise(res => entry.file(res, () => res(null)));
+    if (file) out.push(file);
+    return;
+  }
+  if (entry.isDirectory){
+    const reader = entry.createReader();
+    /* readEntries only returns a batch at a time, so keep asking until empty. */
+    while (true){
+      const batch = await new Promise(res => reader.readEntries(res, () => res([])));
+      if (!batch.length) break;
+      for (const child of batch) await collectPdfsFromEntry(child, out);
+    }
+  }
+}
+
+/* The two picker buttons and the click-anywhere-on-the-dropzone shortcut. */
+$('btnPickFolder').addEventListener('click', e => { e.stopPropagation(); $('filePicker').click(); });
+$('btnPickFiles').addEventListener('click',  e => { e.stopPropagation(); $('filePicker2').click(); });
+dropZone.addEventListener('click', () => $('filePicker2').click());
+$('filePicker').addEventListener('change',  e => addFiles(Array.from(e.target.files)));
+$('filePicker2').addEventListener('change', e => addFiles(Array.from(e.target.files)));
+
+/**
+ * Add newly chosen files to the list. Only .pdf files are kept, duplicates
+ * (same name and size) are skipped so re-dropping a folder is harmless.
+ */
+function addFiles(fileList){
+  const pdfs = fileList.filter(f => /\.pdf$/i.test(f.name));
+  let added = 0;
+
+  for (const file of pdfs){
+    const already = state.files.some(f => f.name === file.name && f.file.size === file.size);
+    if (already) continue;
+    state.files.push({ name: file.name, file: file });
+    added++;
+  }
+
+  /* Keep the list in file-name order so the output is predictable. */
+  state.files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+  updateStatus(pdfs.length === 0 ? 'No PDF files found in what you dropped.' : '');
+  refreshButtons();
+
+  /* Show the first page of the first PDF straight away so there is something
+     to draw a template on. */
+  if (added > 0 && !state.view.doc) showPdfPage(0, 1, true);
+}
+
+
+/* ===========================================================================
+   6. RENDERING A PAGE ONTO THE CANVAS
+
+   Coordinates, once and for all:
+   Every box is stored as four fractions of the page (x, y, w, h, each 0..1),
+   measured on the page AS IT IS MEANT TO BE VIEWED - that is, after PDF.js has
+   applied the page's /Rotate value. Because both the picture you draw on and
+   the text we extract are measured in that same rotated space, rotated pages
+   and slightly different paper sizes both look after themselves.
+   =========================================================================== */
+
+const canvas    = $('pageCanvas');
+const boxLayer  = $('boxLayer');
+const drawGhost = $('drawGhost');
+
+/** Open (or reuse) the document for a given file index. */
+async function getDocForFile(fileIndex){
+  const entry = state.files[fileIndex];
+  if (!entry) return null;
+  const key = entry.name + '|' + entry.file.size;
+
+  if (state.view.doc && state.view.docKey === key) return state.view.doc;
+
+  /* Only one document is kept open for viewing, so memory stays flat even
+     with hundreds of files loaded. */
+  if (state.view.doc){
+    try { await state.view.doc.destroy(); } catch (e) {}
+    state.view.doc = null;
+  }
+  const doc = await openPdf(entry.file);
+  state.view.doc    = doc;
+  state.view.docKey = key;
+  return doc;
+}
+
+/**
+ * Draw one page of one PDF onto the canvas and re-draw all the boxes on top.
+ * If skipUnreadable is true and this PDF cannot be opened, the next one is
+ * tried instead - so one bad file at the top of the folder does not leave you
+ * with a blank page and nothing to draw on.
+ */
+async function showPdfPage(fileIndex, pageNum, skipUnreadable){
+  if (!state.files.length) return;
+  if (fileIndex >= state.files.length && skipUnreadable) return;   /* ran out */
+  fileIndex = clamp(fileIndex, 0, state.files.length - 1);
+
+  try{
+    const doc = await getDocForFile(fileIndex);
+    if (!doc) return;
+
+    state.view.fileIndex = fileIndex;
+    state.view.pageCount = doc.numPages;
+    state.view.pageNum   = clamp(pageNum, 1, doc.numPages);
+
+    const page = await doc.getPage(state.view.pageNum);
+
+    /* getViewport already includes the page's /Rotate value. */
+    const base = page.getViewport({ scale: 1 });
+    state.view.baseW = base.width;
+    state.view.baseH = base.height;
+
+    /* Fit the page to the width of the panel, then apply the zoom setting. */
+    const available = Math.max(300, $('canvasWrap').parentElement.clientWidth - 4);
+    const scale = clamp((available / base.width) * state.view.zoom, 0.05, MAX_RENDER_SCALE);
+    const viewport = page.getViewport({ scale: scale });
+
+    canvas.width  = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    canvas.style.width  = Math.floor(viewport.width) + 'px';
+    canvas.style.height = Math.floor(viewport.height) + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+
+    $('viewerSubject').textContent = '- ' + state.files[fileIndex].name;
+    $('pageLabel').textContent = 'page ' + state.view.pageNum + ' / ' + doc.numPages;
+    $('zoomLabel').textContent = Math.round(state.view.zoom * 100) + '%';
+    drawAllBoxes();
+  } catch (err){
+    const name = (state.files[fileIndex] || {}).name || 'this file';
+    updateStatus('Could not display "' + name + '" (' + err.message + ').');
+    /* Forget the half-open document, then move on to the next file if asked. */
+    state.view.doc = null; state.view.docKey = null;
+    if (skipUnreadable) await showPdfPage(fileIndex + 1, 1, true);
+  }
+}
+
+/* Page navigation and zoom buttons. */
+$('btnPrevPage').addEventListener('click', () => showPdfPage(state.view.fileIndex, state.view.pageNum - 1));
+$('btnNextPage').addEventListener('click', () => showPdfPage(state.view.fileIndex, state.view.pageNum + 1));
+$('btnZoomIn').addEventListener('click',  () => { state.view.zoom = clamp(state.view.zoom + ZOOM_STEP, 0.25, 4); showPdfPage(state.view.fileIndex, state.view.pageNum); });
+$('btnZoomOut').addEventListener('click', () => { state.view.zoom = clamp(state.view.zoom - ZOOM_STEP, 0.25, 4); showPdfPage(state.view.fileIndex, state.view.pageNum); });
+
+
+/* ===========================================================================
+   7. THE BOXES  -  drawing, selecting, moving, resizing, deleting.
+   Boxes are plain <div>s positioned in percentages, so they stay put when the
+   page is zoomed or the window is resized.
+   =========================================================================== */
+
+/** Re-create every box element over the canvas. */
+function drawAllBoxes(){
+  /* Remove the old ones (but keep the dashed "ghost" used while drawing). */
+  Array.from(boxLayer.querySelectorAll('.fieldBox')).forEach(el => el.remove());
+  boxLayer.style.width  = canvas.style.width;
+  boxLayer.style.height = canvas.style.height;
+
+  for (const field of state.fields){
+    const el = document.createElement('div');
+    el.className = 'fieldBox';
+    el.dataset.id = field.id;
+    el.style.left   = (field.x * 100) + '%';
+    el.style.top    = (field.y * 100) + '%';
+    el.style.width  = (field.w * 100) + '%';
+    el.style.height = (field.h * 100) + '%';
+
+    /* Boxes belonging to a different page are shown faintly, as a reminder. */
+    if (field.page !== state.view.pageNum) el.classList.add('offpage');
+    if (field.id === state.selectedId){
+      el.classList.add('selected');
+      addResizeHandles(el);
+    }
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.textContent = field.name + '  (p' + field.page + ')';
+    el.appendChild(tag);
+
+    boxLayer.appendChild(el);
+  }
+}
+
+/** The eight little white squares on the selected box. */
+function addResizeHandles(el){
+  const spots = [
+    ['nw', 0,   0  ], ['n', 0.5, 0  ], ['ne', 1,   0  ],
+    ['w',  0,   0.5],                  ['e',  1,   0.5],
+    ['sw', 0,   1  ], ['s', 0.5, 1  ], ['se', 1,   1  ]
+  ];
+  for (const [dir, fx, fy] of spots){
+    const h = document.createElement('div');
+    h.className = 'handle';
+    h.dataset.dir = dir;
+    h.style.left = 'calc(' + (fx * 100) + '% - 5px)';
+    h.style.top  = 'calc(' + (fy * 100) + '% - 5px)';
+    h.style.cursor = dir + '-resize';
+    el.appendChild(h);
+  }
+}
+
+/* --- mouse handling ------------------------------------------------------ */
+
+let drag = null;   /* describes whatever the mouse is currently doing */
+
+boxLayer.addEventListener('mousedown', (e) => {
+  if (!state.files.length || !state.view.doc) return;
+  const rect = boxLayer.getBoundingClientRect();
+  const startX = (e.clientX - rect.left) / rect.width;
+  const startY = (e.clientY - rect.top)  / rect.height;
+
+  const handle = e.target.closest('.handle');
+  const boxEl  = e.target.closest('.fieldBox');
+
+  if (handle && boxEl){
+    /* Resizing an existing box. */
+    const field = findField(boxEl.dataset.id);
+    drag = { mode:'resize', dir:handle.dataset.dir, field, startX, startY, orig:{...field} };
+  } else if (boxEl){
+    /* Moving an existing box. */
+    const field = findField(boxEl.dataset.id);
+    selectField(field.id);
+    drag = { mode:'move', field, startX, startY, orig:{...field} };
+  } else {
+    /* Empty space: start drawing a brand-new box. */
+    drag = { mode:'draw', startX, startY };
+    drawGhost.style.display = 'block';
+    drawGhost.style.left = (startX * 100) + '%';
+    drawGhost.style.top  = (startY * 100) + '%';
+    drawGhost.style.width = '0%';
+    drawGhost.style.height = '0%';
+  }
+  e.preventDefault();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!drag) return;
+  const rect = boxLayer.getBoundingClientRect();
+  const x = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+  const y = clamp((e.clientY - rect.top)  / rect.height, 0, 1);
+
+  if (drag.mode === 'draw'){
+    const left = Math.min(x, drag.startX), top = Math.min(y, drag.startY);
+    drawGhost.style.left   = (left * 100) + '%';
+    drawGhost.style.top    = (top  * 100) + '%';
+    drawGhost.style.width  = (Math.abs(x - drag.startX) * 100) + '%';
+    drawGhost.style.height = (Math.abs(y - drag.startY) * 100) + '%';
+    return;
+  }
+
+  const f = drag.field, o = drag.orig;
+  if (drag.mode === 'move'){
+    f.x = clamp(o.x + (x - drag.startX), 0, 1 - o.w);
+    f.y = clamp(o.y + (y - drag.startY), 0, 1 - o.h);
+  } else if (drag.mode === 'resize'){
+    let left = o.x, top = o.y, right = o.x + o.w, bottom = o.y + o.h;
+    if (drag.dir.includes('w')) left   = clamp(x, 0, right  - 0.005);
+    if (drag.dir.includes('e')) right  = clamp(x, left + 0.005, 1);
+    if (drag.dir.includes('n')) top    = clamp(y, 0, bottom - 0.005);
+    if (drag.dir.includes('s')) bottom = clamp(y, top + 0.005, 1);
+    f.x = left; f.y = top; f.w = right - left; f.h = bottom - top;
+  }
+  drawAllBoxes();
+  renderFieldList();
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (!drag) return;
+  const finishing = drag;
+  drag = null;
+  drawGhost.style.display = 'none';
+
+  if (finishing.mode === 'draw'){
+    const rect = boxLayer.getBoundingClientRect();
+    const x = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    const y = clamp((e.clientY - rect.top)  / rect.height, 0, 1);
+    const wPx = Math.abs(x - finishing.startX) * rect.width;
+    const hPx = Math.abs(y - finishing.startY) * rect.height;
+
+    /* Ignore accidental clicks: they would create invisible zero-size boxes. */
+    if (wPx < MIN_BOX_SIZE_PX || hPx < MIN_BOX_SIZE_PX){
+      selectField(null);
+      drawAllBoxes(); renderFieldList();
+      return;
+    }
+    addField({
+      x: Math.min(x, finishing.startX),
+      y: Math.min(y, finishing.startY),
+      w: Math.abs(x - finishing.startX),
+      h: Math.abs(y - finishing.startY),
+      page: state.view.pageNum
+    });
+  } else {
+    refreshButtons();   /* geometry changed, so old results are stale */
+  }
+});
+
+/* Arrow keys nudge the selected box, as long as you are not typing in a box. */
+window.addEventListener('keydown', (e) => {
+  if (!state.selectedId) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return;
+
+  const field = findField(state.selectedId);
+  if (!field) return;
+  const step = e.shiftKey ? NUDGE_STEP_BIG : NUDGE_STEP;
+  let handled = true;
+
+  switch (e.key){
+    case 'ArrowLeft':  field.x = clamp(field.x - step, 0, 1 - field.w); break;
+    case 'ArrowRight': field.x = clamp(field.x + step, 0, 1 - field.w); break;
+    case 'ArrowUp':    field.y = clamp(field.y - step, 0, 1 - field.h); break;
+    case 'ArrowDown':  field.y = clamp(field.y + step, 0, 1 - field.h); break;
+    case 'Delete':
+    case 'Backspace':  deleteField(field.id); return;
+    default: handled = false;
+  }
+  if (handled){ e.preventDefault(); drawAllBoxes(); renderFieldList(); }
+});
+
+
+/* ===========================================================================
+   8. THE FIELD LIST  -  one entry per column, editable.
+   =========================================================================== */
+
+function findField(id){
+  return state.fields.find(f => String(f.id) === String(id)) || null;
+}
+
+/**
+ * Make a field name unique. Duplicate column names are never allowed to
+ * silently overwrite each other - a numeric suffix is added instead.
+ */
+function makeUniqueName(wanted, ignoreId){
+  let base = normaliseWhitespace(wanted) || 'Field';
+  const taken = (n) => state.fields.some(f => f.id !== ignoreId && f.name.toLowerCase() === n.toLowerCase());
+  if (!taken(base)) return base;
+  let n = 2;
+  while (taken(base + ' (' + n + ')')) n++;
+  return base + ' (' + n + ')';
+}
+
+/** Create a new field from a freshly drawn rectangle. */
+function addField(rect){
+  const field = {
+    id  : nextFieldId++,
+    name: makeUniqueName('Field ' + (state.fields.length + 1)),
+    page: rect.page,
+    x: rect.x, y: rect.y, w: rect.w, h: rect.h
+  };
+  state.fields.push(field);
+  selectField(field.id);
+  drawAllBoxes();
+  renderFieldList();
+  refreshButtons();
+
+  /* Put the cursor straight into the new name so you can just type. */
+  const input = document.querySelector('.fieldRow[data-id="' + field.id + '"] input[type=text]');
+  if (input){ input.focus(); input.select(); }
+}
+
+function deleteField(id){
+  state.fields = state.fields.filter(f => String(f.id) !== String(id));
+  if (String(state.selectedId) === String(id)) state.selectedId = null;
+  drawAllBoxes();
+  renderFieldList();
+  refreshButtons();
+}
+
+function selectField(id){
+  state.selectedId = id;
+  drawAllBoxes();
+  renderFieldList();
+}
+
+/** Rebuild the field list panel on the right. */
+function renderFieldList(){
+  const list = $('fieldList');
+  list.innerHTML = '';
+  $('fieldEmptyHint').style.display = state.fields.length ? 'none' : 'block';
+
+  for (const field of state.fields){
+    const row = document.createElement('div');
+    row.className = 'fieldRow' + (String(field.id) === String(state.selectedId) ? ' selected' : '');
+    row.dataset.id = field.id;
+
+    /* --- name, page number, buttons --- */
+    const top = document.createElement('div');
+    top.className = 'top';
+
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.value = field.name;
+    name.title = 'Column name';
+    name.addEventListener('change', () => {
+      const unique = makeUniqueName(name.value, field.id);
+      if (unique !== normaliseWhitespace(name.value)){
+        updateStatus('That column name was already used, so it was saved as "' + unique + '".');
+      }
+      field.name = unique;
+      name.value = unique;
+      drawAllBoxes();
+      refreshButtons();
+    });
+
+    const pageLbl = document.createElement('span');
+    pageLbl.textContent = 'page';
+    pageLbl.style.color = 'var(--muted)';
+
+    const page = document.createElement('input');
+    page.type = 'number'; page.min = '1'; page.step = '1';
+    page.value = field.page; page.style.width = '52px';
+    page.title = 'Which page of each PDF this value sits on';
+    page.addEventListener('change', () => {
+      field.page = Math.max(1, parseInt(page.value, 10) || 1);
+      page.value = field.page;
+      drawAllBoxes(); refreshButtons();
+    });
+
+    const goto = document.createElement('button');
+    goto.type = 'button'; goto.textContent = 'View';
+    goto.title = 'Show this box on its page';
+    goto.addEventListener('click', () => {
+      selectField(field.id);
+      showPdfPage(state.view.fileIndex, field.page);
+    });
+
+    const del = document.createElement('button');
+    del.type = 'button'; del.textContent = '×';
+    del.title = 'Delete this field';
+    del.addEventListener('click', () => deleteField(field.id));
+
+    top.append(name, pageLbl, page, goto, del);
+
+    /* --- the four coordinates, shown as percentages of the page --- */
+    const coords = document.createElement('div');
+    coords.className = 'coords';
+    const parts = [['x','x'], ['y','y'], ['w','width'], ['h','height']];
+    for (const [key, label] of parts){
+      const wrap = document.createElement('label');
+      const cap  = document.createElement('span');
+      cap.textContent = label + ' %';
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = '0.1';
+      inp.value = (field[key] * 100).toFixed(1);
+      inp.addEventListener('change', () => {
+        const v = clamp((parseFloat(inp.value) || 0) / 100, 0, 1);
+        field[key] = key === 'w' || key === 'h' ? Math.max(0.002, v) : v;
+        /* keep the box on the page */
+        field.w = Math.min(field.w, 1 - field.x);
+        field.h = Math.min(field.h, 1 - field.y);
+        drawAllBoxes(); renderFieldList(); refreshButtons();
+      });
+      wrap.append(cap, inp);
+      coords.appendChild(wrap);
+    }
+
+    row.append(top, coords);
+    row.addEventListener('mousedown', (e) => {
+      if (e.target.tagName.toLowerCase() !== 'button') selectField(field.id);
+    });
+    list.appendChild(row);
+  }
+}
+
+
+/* ===========================================================================
+   9. READING TEXT OUT OF A PAGE
+
+   PDF.js gives us every scrap of text on a page together with a matrix saying
+   where it sits. We turn each scrap into a plain rectangle measured in the
+   same fractions the boxes use, then keep the scraps that overlap the box.
+   =========================================================================== */
+
+/**
+ * Turn one PDF.js text item into { text, left, top, right, bottom, height },
+ * measured as fractions of the page (0..1), with (0,0) at the top-left of the
+ * page as it is displayed.
+ */
+function textItemToRect(item, viewport){
+  /* Combine the page's own transform with the text item's transform. The
+     result maps the text onto the displayed page, rotation included. */
+  const m = pdfjsLib.Util.transform(viewport.transform, item.transform);
+
+  /* Where the text starts (the left end of its baseline). */
+  const originX = m[4];
+  const originY = m[5];
+
+  /* Which way the text runs, and how tall it is. */
+  const angle  = Math.atan2(m[1], m[0]);
+  const height = Math.hypot(m[2], m[3]) || Math.abs(m[3]) || 1;
+  const width  = (item.width || 0) * viewport.scale;
+
+  /* Walk along the text direction, and up from the baseline. */
+  const alongX = Math.cos(angle),  alongY = Math.sin(angle);
+  const upX    = Math.sin(angle),  upY    = -Math.cos(angle);
+
+  const corners = [
+    [originX,                                originY                               ],
+    [originX + width * alongX,               originY + width * alongY              ],
+    [originX + height * upX,                 originY + height * upY                ],
+    [originX + width * alongX + height * upX, originY + width * alongY + height * upY]
+  ];
+
+  const xs = corners.map(c => c[0]);
+  const ys = corners.map(c => c[1]);
+
+  return {
+    text  : item.str,
+    left  : Math.min.apply(null, xs) / viewport.width,
+    right : Math.max.apply(null, xs) / viewport.width,
+    top   : Math.min.apply(null, ys) / viewport.height,
+    bottom: Math.max.apply(null, ys) / viewport.height,
+    height: height / viewport.height
+  };
+}
+
+/** How much of rectangle A's area lies inside rectangle B (0..1). */
+function overlapFraction(a, b){
+  const w = Math.min(a.right, b.right)   - Math.max(a.left, b.left);
+  const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  if (w <= 0 || h <= 0) return 0;
+  const areaA = Math.max(1e-9, (a.right - a.left) * (a.bottom - a.top));
+  return (w * h) / areaA;
+}
+
+/**
+ * Take the text scraps that fall inside one box, put them into reading order
+ * (top to bottom, then left to right) and join them into one tidy string.
+ */
+function joinItemsInReadingOrder(items){
+  if (!items.length) return '';
+
+  /* Sort roughly top-to-bottom first so lines can be grouped. */
+  const sorted = items.slice().sort((a, b) => (a.top - b.top) || (a.left - b.left));
+
+  const lines = [];
+  for (const item of sorted){
+    const line = lines.find(L => Math.abs(L.top - item.top) <= LINE_MERGE_TOLERANCE);
+    if (line){
+      line.items.push(item);
+      line.top = Math.min(line.top, item.top);
+    } else {
+      lines.push({ top: item.top, items: [item] });
+    }
+  }
+
+  lines.sort((a, b) => a.top - b.top);
+
+  const lineStrings = lines.map(line => {
+    line.items.sort((a, b) => a.left - b.left);
+    let out = '';
+    let prev = null;
+    for (const item of line.items){
+      if (prev){
+        /* A wide gap means a real space; a small one means the same word was
+           simply delivered in two pieces. */
+        const gap = item.left - prev.right;
+        const needsSpace = gap > (item.height || 0.01) * WORD_GAP_RATIO;
+        if (needsSpace && !/\s$/.test(out) && !/^\s/.test(item.text)) out += ' ';
+      }
+      out += item.text;
+      prev = item;
+    }
+    return normaliseWhitespace(out);
+  }).filter(s => s.length > 0);
+
+  /* Wrapped lines are joined with a single space. */
+  return normaliseWhitespace(lineStrings.join(' '));
+}
+
+/**
+ * Apply every field to one open PDF and return the finished row.
+ * Never throws: anything that goes wrong becomes a flagged cell instead.
+ */
+async function extractRowFromDoc(doc, fileIndex, fileName){
+  const row = { file: fileName, fileIndex: fileIndex, cells: {}, flagged: false };
+
+  /* Work page by page so each page is only fetched and read once. */
+  const byPage = new Map();
+  for (const field of state.fields){
+    if (!byPage.has(field.page)) byPage.set(field.page, []);
+    byPage.get(field.page).push(field);
+  }
+
+  for (const [pageNum, fields] of byPage){
+    /* The PDF may simply be shorter than the template expects. */
+    if (pageNum > doc.numPages){
+      for (const f of fields) row.cells[f.name] = { text:'', status:'nopage' };
+      row.flagged = true;
+      continue;
+    }
+
+    let items = [];
+    let viewport = null;
+    try {
+      const page = await doc.getPage(pageNum);
+      viewport = page.getViewport({ scale: 1 });
+      const content = await page.getTextContent();
+      items = content.items
+        .filter(it => typeof it.str === 'string' && it.str.length)
+        .map(it => textItemToRect(it, viewport));
+    } catch (err){
+      for (const f of fields) row.cells[f.name] = { text:'', status:'notext' };
+      row.flagged = true;
+      continue;
+    }
+
+    /* A scanned/image-only page yields nothing. Flag it - we do not do OCR. */
+    if (!items.length){
+      for (const f of fields) row.cells[f.name] = { text:'', status:'notext' };
+      row.flagged = true;
+      continue;
+    }
+
+    for (const field of fields){
+      const target = {
+        left  : field.x - BOX_TOLERANCE,
+        top   : field.y - BOX_TOLERANCE,
+        right : field.x + field.w + BOX_TOLERANCE,
+        bottom: field.y + field.h + BOX_TOLERANCE
+      };
+      const hits = items.filter(it => overlapFraction(it, target) > MIN_ITEM_OVERLAP);
+      const text = joinItemsInReadingOrder(hits);
+      row.cells[field.name] = { text: text, status: text ? 'ok' : 'empty' };
+    }
+  }
+  return row;
+}
+
+
+/* ===========================================================================
+   10. RUN  -  loop over every loaded PDF and build the table.
+   =========================================================================== */
+
+$('btnRun').addEventListener('click', runExtraction);
+
+async function runExtraction(){
+  if (state.running) return;
+  if (!state.files.length || !state.fields.length) return;
+
+  state.running = true;
+  state.rows = [];
+  refreshButtons();
+  $('progressOuter').style.display = 'block';
+
+  /* The viewer holds a document open; close it so a big batch has room. */
+  if (state.view.doc){
+    try { await state.view.doc.destroy(); } catch (e) {}
+    state.view.doc = null; state.view.docKey = null;
+  }
+
+  for (let i = 0; i < state.files.length; i++){
+    const entry = state.files[i];
+    updateStatus('Reading ' + (i + 1) + ' of ' + state.files.length + ': ' + entry.name);
+    $('progressInner').style.width = ((i / state.files.length) * 100).toFixed(1) + '%';
+
+    /* Let the browser repaint between files so nothing appears frozen. */
+    await letBrowserBreathe();
+
+    let doc = null;
+    try {
+      doc = await openPdf(entry.file);
+      const row = await extractRowFromDoc(doc, i, entry.name);
+      state.rows.push(row);
+    } catch (err){
+      /* A file we cannot open at all still gets a row, clearly flagged. */
+      const row = { file: entry.name, fileIndex: i, cells: {}, flagged: true, note: err.message };
+      for (const f of state.fields) row.cells[f.name] = { text:'', status:'docfail' };
+      state.rows.push(row);
+    } finally {
+      if (doc){ try { await doc.destroy(); } catch (e) {} }
+    }
+  }
+
+  $('progressInner').style.width = '100%';
+  setTimeout(() => { $('progressOuter').style.display = 'none'; }, 400);
+
+  state.running = false;
+  renderResultsTable();
+  refreshButtons();
+  updateStatus('');
+
+  /* Put a page back on screen so the viewer is usable again. */
+  if (state.files.length) showPdfPage(state.view.fileIndex, state.view.pageNum);
+}
+
+
+/* ===========================================================================
+   11. THE RESULTS TABLE, AND CHECKING A CELL BY EYE
+   =========================================================================== */
+
+function renderResultsTable(){
+  const table = $('resultsTable');
+  const thead = table.tHead, tbody = table.tBodies[0];
+  thead.innerHTML = ''; tbody.innerHTML = '';
+  if (!state.rows.length) return;
+
+  const headRow = thead.insertRow();
+  ['#', CSV_FILENAME_COLUMN].concat(state.fields.map(f => f.name)).forEach(label => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+
+  state.rows.forEach((row, rowIndex) => {
+    const tr = tbody.insertRow();
+    if (row.flagged) tr.className = 'rowFlagged';
+
+    const num = tr.insertCell();
+    num.textContent = rowIndex + 1;
+    num.style.cursor = 'default';
+
+    const nameCell = tr.insertCell();
+    nameCell.textContent = row.file;
+    nameCell.title = row.note ? (row.file + ' - ' + row.note) : row.file;
+
+    state.fields.forEach(field => {
+      const cell = row.cells[field.name] || { text:'', status:'empty' };
+      const td = tr.insertCell();
+      td.dataset.row = rowIndex;
+      td.dataset.field = field.id;
+
+      if (cell.status === 'ok'){
+        td.textContent = cell.text;
+        td.title = cell.text;
+      } else if (cell.status === 'empty'){
+        td.className = 'empty';
+        td.textContent = '';
+        td.title = 'Nothing found inside this box';
+      } else {
+        td.className = 'error';
+        td.textContent = CELL_ERROR_TEXT[cell.status] || 'problem';
+        td.title = CELL_ERROR_TEXT[cell.status] || 'problem';
+      }
+      td.addEventListener('click', () => peekAtCell(rowIndex, field.id, td));
+    });
+  });
+}
+
+/**
+ * Show the PDF page behind one cell, with that field's box drawn on it and
+ * the extracted text printed underneath, so the value can be checked by eye.
+ */
+async function peekAtCell(rowIndex, fieldId, tdElement){
+  const row   = state.rows[rowIndex];
+  const field = findField(fieldId);
+  if (!row || !field) return;
+
+  Array.from(document.querySelectorAll('td.peeking')).forEach(td => td.classList.remove('peeking'));
+  if (tdElement) tdElement.classList.add('peeking');
+
+  /* Rows remember which loaded file they came from; fall back to the name in
+     case the list of files has been added to since the last Run. */
+  let fileIndex = row.fileIndex;
+  if (!state.files[fileIndex] || state.files[fileIndex].name !== row.file){
+    fileIndex = state.files.findIndex(f => f.name === row.file);
+  }
+  if (fileIndex < 0) return;
+
+  selectField(field.id);
+  await showPdfPage(fileIndex, field.page);
+
+  const cell = row.cells[field.name] || { text:'', status:'empty' };
+  const info = $('previewInfo');
+  let explanation;
+  if (cell.status === 'ok')          explanation = cell.text;
+  else if (cell.status === 'empty')  explanation = '(nothing found inside this box)';
+  else                               explanation = '(' + (CELL_ERROR_TEXT[cell.status] || 'problem') + ')';
+
+  info.style.display = 'block';
+  info.innerHTML = '';
+  const line1 = document.createElement('div');
+  line1.innerHTML = '<b>' + escapeHtml(row.file) + '</b> - field <b>' +
+                    escapeHtml(field.name) + '</b>, page ' + field.page;
+  const line2 = document.createElement('div');
+  line2.style.marginTop = '4px';
+  line2.textContent = 'Extracted: ' + explanation;
+  info.append(line1, line2);
+}
+
+/** Escape the few characters that would otherwise be read as HTML. */
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+  ));
+}
+
+
+/* ===========================================================================
+   12. EXPORTS  -  CSV of the table, JSON of the template.
+   =========================================================================== */
+
+/**
+ * Wrap one value for CSV. Anything containing a comma, a quote, or a line
+ * break is put in double quotes, and inner quotes are doubled - the standard
+ * rule that Excel and Google Sheets both expect.
+ */
+function csvEscape(value){
+  const s = value == null ? '' : String(value);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+$('btnExportCsv').addEventListener('click', () => {
+  if (!state.rows.length) return;
+  const header = [CSV_FILENAME_COLUMN].concat(state.fields.map(f => f.name));
+  const lines  = [header.map(csvEscape).join(',')];
+
+  for (const row of state.rows){
+    const cells = [row.file].concat(state.fields.map(f => {
+      const c = row.cells[f.name];
+      if (!c) return '';
+      /* Unreadable cells say why; empty ones stay genuinely empty. */
+      return c.status === 'ok' || c.status === 'empty' ? c.text : (CELL_ERROR_TEXT[c.status] || '');
+    }));
+    lines.push(cells.map(csvEscape).join(','));
+  }
+
+  const text = (CSV_ADD_BOM ? '﻿' : '') + lines.join('\r\n') + '\r\n';
+  downloadTextFile('schedule-' + todayStamp() + '.csv', text, 'text/csv;charset=utf-8');
+});
+
+$('btnExportTemplate').addEventListener('click', () => {
+  if (!state.fields.length) return;
+  const template = {
+    format : TEMPLATE_FORMAT,
+    version: TEMPLATE_VERSION,
+    created: new Date().toISOString(),
+    note   : 'Coordinates are fractions of the page (0..1), measured on the page as displayed.',
+    fields : state.fields.map(f => ({
+      name: f.name,
+      page: f.page,
+      x: +f.x.toFixed(6), y: +f.y.toFixed(6),
+      w: +f.w.toFixed(6), h: +f.h.toFixed(6)
+    }))
+  };
+  downloadTextFile('spec-template-' + todayStamp() + '.json',
+                   JSON.stringify(template, null, 2), 'application/json');
+});
+
+$('btnImportTemplate').addEventListener('click', () => $('templatePicker').click());
+
+$('templatePicker').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';               /* allow picking the same file twice */
+  if (!file) return;
+
+  try {
+    const parsed = JSON.parse(await file.text());
+    const incoming = Array.isArray(parsed) ? parsed : parsed.fields;
+    if (!Array.isArray(incoming)) throw new Error('no "fields" list inside');
+
+    state.fields = [];
+    nextFieldId = 1;
+    for (const raw of incoming){
+      const field = {
+        id  : nextFieldId++,
+        name: '',
+        page: Math.max(1, parseInt(raw.page, 10) || 1),
+        x: clamp(Number(raw.x) || 0, 0, 1),
+        y: clamp(Number(raw.y) || 0, 0, 1),
+        w: clamp(Number(raw.w) || 0, 0.002, 1),
+        h: clamp(Number(raw.h) || 0, 0.002, 1)
+      };
+      field.w = Math.min(field.w, 1 - field.x);
+      field.h = Math.min(field.h, 1 - field.y);
+      state.fields.push(field);
+      /* Named after adding, so duplicates in the file get suffixed, not lost. */
+      field.name = makeUniqueName(raw.name || 'Field', field.id);
+    }
+    state.rows = [];
+    state.selectedId = null;
+    renderFieldList();
+    renderResultsTable();
+    drawAllBoxes();
+    refreshButtons();
+    updateStatus('Template loaded: ' + state.fields.length + ' field(s) from ' + file.name + '.');
+  } catch (err){
+    showBanner('That template file could not be read: ' + err.message);
+  }
+});
+
+
+/* ===========================================================================
+   13. STATUS LINE, BUTTON STATES, AND STARTUP
+   =========================================================================== */
+
+function updateStatus(extraMessage){
+  /* Called with a string, the message is replaced; called with nothing, the
+     current message is left alone (button refreshes must not wipe it). */
+  if (extraMessage !== undefined) state.message = extraMessage;
+  const bits = [];
+  bits.push(state.files.length + ' PDF' + (state.files.length === 1 ? '' : 's') + ' loaded');
+  bits.push(state.fields.length + ' field' + (state.fields.length === 1 ? '' : 's') + ' in template');
+
+  if (state.rows.length){
+    const flagged = state.rows.filter(r => r.flagged).length;
+    const empties = state.rows.reduce((n, r) =>
+      n + Object.values(r.cells).filter(c => c.status === 'empty').length, 0);
+    let line = state.rows.length + ' row' + (state.rows.length === 1 ? '' : 's') + ' extracted';
+    if (empties) line += ', ' + empties + ' empty cell' + (empties === 1 ? '' : 's');
+    bits.push(line);
+    if (flagged) bits.push('<span class="bad">' + flagged + ' row(s) need manual checking</span>');
+  }
+
+  $('statusText').innerHTML = bits.join(' &nbsp;|&nbsp; ') +
+    (state.message ? ' &nbsp;|&nbsp; ' + escapeHtml(state.message) : '');
+}
+
+function refreshButtons(){
+  $('btnRun').disabled            = state.running || !state.files.length || !state.fields.length;
+  $('btnExportCsv').disabled      = state.running || !state.rows.length;
+  $('btnExportTemplate').disabled = state.running || !state.fields.length;
+  $('btnPrevPage').disabled       = !state.view.doc || state.view.pageNum <= 1;
+  $('btnNextPage').disabled       = !state.view.doc || state.view.pageNum >= state.view.pageCount;
+  updateStatus();
+}
+
+$('btnClearAll').addEventListener('click', async () => {
+  if (state.view.doc){ try { await state.view.doc.destroy(); } catch (e) {} }
+  state.files = []; state.fields = []; state.rows = [];
+  state.selectedId = null; nextFieldId = 1; state.message = '';
+  state.view.doc = null; state.view.docKey = null;
+  state.view.pageNum = 1; state.view.pageCount = 0;
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  canvas.width = 10; canvas.height = 10;
+  canvas.style.width = ''; canvas.style.height = '';
+  $('viewerSubject').textContent = '';
+  $('pageLabel').textContent = 'page - / -';
+  $('previewInfo').style.display = 'none';
+  drawAllBoxes(); renderFieldList(); renderResultsTable(); refreshButtons();
+});
+
+/* Re-fit the page when the window changes size (waiting until it settles). */
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  if (!state.view.doc || state.running) return;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => showPdfPage(state.view.fileIndex, state.view.pageNum), 200);
+});
+
+/* Nothing is ever written to localStorage or any other browser storage:
+   the exported template JSON file is the only place anything is kept. */
+
+setUpPdfJs().then(() => {
+  renderFieldList();
+  refreshButtons();
+});
+
+</script>
+</body>
+</html>
