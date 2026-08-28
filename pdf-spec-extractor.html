@@ -105,6 +105,8 @@
   --error-bg:#ffdcdc;         /* failed cell / row highlight             */
   --ocr-bg:#eaf3ff;           /* cell whose text came from OCR           */
   --check-bg:#ffe8cc;         /* two readings disagreed - check it       */
+  --stripe:#f4f6f8;           /* every other table row                   */
+  --row-active:#e3edfb;       /* the row you last clicked                */
 }
 *{box-sizing:border-box}
 body{
@@ -143,6 +145,21 @@ input[type=text], input[type=number]{
 }
 #statusLine .bad{color:#b3261e; font-weight:600}
 #progressOuter{height:6px; background:#e2e6eb; border-radius:3px; margin-top:6px; display:none}
+
+/* The list of loaded files is folded away, so a hundred of them cost one line
+   of the window until you want to see them. */
+#fileListBox{margin-top:5px}
+#fileListBox summary{cursor:pointer; color:var(--accent); font-size:12px}
+#fileList{
+  margin:6px 0 0; padding:0 0 0 26px; max-height:170px; overflow:auto;
+  border:1px solid var(--line); border-radius:3px; background:#fff;
+}
+#fileList li{padding:2px 4px 2px 0; font-size:12px}
+#fileList li span{cursor:pointer}
+#fileList li span:hover{text-decoration:underline; color:var(--accent)}
+#fileList li.showing{font-weight:700}
+#fileList li.flagged::marker{color:#b3261e}
+#fileList li.flagged span::after{content:' - needs checking'; color:#b3261e; font-weight:400}
 #progressInner{height:100%; width:0%; background:var(--accent); border-radius:3px}
 #banner{
   display:none; padding:9px 11px; border:1px solid #d33; background:#ffecec;
@@ -204,12 +221,26 @@ table{border-collapse:collapse; width:100%; font-size:12px}
 th,td{border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top}
 th{background:var(--panel); position:sticky; top:0; z-index:2; white-space:nowrap}
 td{max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer}
+
+/* Every other row is tinted, which makes a wide table much easier to follow.
+   Cells with something to say paint over the stripe with their own colour. */
+tbody tr:nth-child(even){background:var(--stripe)}
+tbody tr.rowActive{background:var(--row-active)}
+
 td.ocr{background:var(--ocr-bg)}
 td.check{background:var(--check-bg)}
 td.check::after{content:' ?'; color:#a35400; font-weight:700}
 td.empty{background:var(--warn-bg)}
 td.error{background:var(--error-bg); color:#8b1a1a; font-style:italic}
-tr.rowFlagged td:first-child{background:var(--error-bg); font-weight:600}
+td.file{font-weight:600}
+tr.rowFlagged td.file{background:var(--error-bg)}
+
+/* The row you last clicked is boxed in, so the value you are checking can be
+   followed all the way across without losing your place. The outline is used
+   rather than a background so the cell colours above still show through. */
+tbody tr.rowActive td{border-top:2px solid var(--accent); border-bottom:2px solid var(--accent)}
+tbody tr.rowActive td:first-child{border-left:2px solid var(--accent)}
+tbody tr.rowActive td:last-child{border-right:2px solid var(--accent)}
 td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 
 /* --- preview panel ------------------------------------------------------ */
@@ -271,6 +302,10 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 <div id="statusLine">
   <span id="statusText">No PDFs loaded. No template loaded.</span>
   <div id="progressOuter"><div id="progressInner"></div></div>
+  <details id="fileListBox">
+    <summary id="fileListSummary">No files loaded</summary>
+    <ol id="fileList"></ol>
+  </details>
 </div>
 
 <div class="main">
@@ -700,6 +735,7 @@ function addFiles(fileList){
 
   if (!fileList.length) return;    /* nothing was dropped that we handle here */
   updateStatus(pdfs.length === 0 ? 'No PDF files found in what you dropped.' : '');
+  renderFileList();
   refreshButtons();
 
   /* Show the first page of the first PDF straight away so there is something
@@ -788,6 +824,7 @@ async function showPdfPage(fileIndex, pageNum, skipUnreadable){
     $('pageLabel').textContent = 'page ' + state.view.pageNum + ' / ' + doc.numPages;
     $('zoomLabel').textContent = Math.round(state.view.zoom * 100) + '%';
     drawAllBoxes();
+    renderFileList();
     /* The page is on screen now, so Prev/Next can be trusted again. Without
        this they stay disabled after a Run, which closes the viewer's copy of
        the document while the batch is read. */
@@ -1152,6 +1189,42 @@ function deleteField(id){
   drawAllBoxes();
   renderFieldList();
   refreshButtons();
+}
+
+/**
+ * Rebuild the folded-away list of loaded PDFs under the status line.
+ * Clicking a name shows that PDF in the page view.
+ */
+function renderFileList(){
+  const list = $('fileList');
+  const box  = $('fileListBox');
+  list.innerHTML = '';
+
+  if (!state.files.length){
+    $('fileListSummary').textContent = 'No files loaded';
+    box.open = false;
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = '';
+  $('fileListSummary').textContent =
+    'Files loaded: ' + state.files.length + ' (click to show the list)';
+
+  state.files.forEach((entry, index) => {
+    const item = document.createElement('li');
+
+    /* After a Run, mark the files whose row needs a human eye. */
+    const row = state.rows.find(r => r.file === entry.name);
+    if (row && row.flagged) item.className = 'flagged';
+    if (index === state.view.fileIndex) item.classList.add('showing');
+
+    const label = document.createElement('span');
+    label.textContent = entry.name;
+    label.title = 'Show this PDF in the page view';
+    label.addEventListener('click', () => showPdfPage(index, 1));
+    item.appendChild(label);
+    list.appendChild(item);
+  });
 }
 
 /** Rebuild the field list panel on the right. */
@@ -1729,6 +1802,7 @@ async function runExtraction(){
 
   state.running = false;
   renderResultsTable();
+  renderFileList();
   /* Keep the explanation on screen if OCR could not be used - the cells only
      say "OCR unavailable", which does not tell you what to do about it. */
   updateStatus(state.ocr.failure || '');
@@ -1798,6 +1872,7 @@ function renderResultsTable(){
     });
 
     const nameCell = tr.insertCell();
+    nameCell.className = 'file';
     nameCell.textContent = row.file;
     nameCell.title = row.note ? (row.file + ' - ' + row.note) : row.file;
     nameCell.style.cursor = 'default';
@@ -1813,8 +1888,15 @@ async function peekAtCell(rowIndex, fieldId, tdElement){
   const field = findField(fieldId);
   if (!row || !field) return;
 
+  /* Mark the cell being checked, and box in the row it belongs to so the eye
+     can follow it right across a wide table. */
   Array.from(document.querySelectorAll('td.peeking')).forEach(td => td.classList.remove('peeking'));
-  if (tdElement) tdElement.classList.add('peeking');
+  Array.from(document.querySelectorAll('tr.rowActive')).forEach(tr => tr.classList.remove('rowActive'));
+  if (tdElement){
+    tdElement.classList.add('peeking');
+    const tr = tdElement.closest('tr');
+    if (tr) tr.classList.add('rowActive');
+  }
 
   /* Rows remember which loaded file they came from; fall back to the name in
      case the list of files has been added to since the last Run. */
@@ -2042,7 +2124,7 @@ $('btnClearAll').addEventListener('click', async () => {
   $('viewerSubject').textContent = '';
   $('pageLabel').textContent = 'page - / -';
   $('previewInfo').style.display = 'none';
-  drawAllBoxes(); renderFieldList(); renderResultsTable(); refreshButtons();
+  drawAllBoxes(); renderFieldList(); renderResultsTable(); renderFileList(); refreshButtons();
 });
 
 /* Re-fit the page when the window changes size (waiting until it settles). */
@@ -2065,6 +2147,7 @@ $('showNames').addEventListener('change', () => {
 });
 
 setUpPdfJs().then(() => {
+  renderFileList();
   renderFieldList();
   updateSelectionNote();
   refreshButtons();

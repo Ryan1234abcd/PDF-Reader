@@ -25,7 +25,9 @@ It handles both kinds of spec sheet:
 
 1. **Drop your folder of PDFs** onto the grey box at the top (sub-folders are
    searched too, and anything that isn't a `.pdf` is ignored). The first page of
-   the first PDF appears so you have something to work on.
+   the first PDF appears so you have something to work on. **Files loaded** under
+   the status line folds open to list them — click a name to show that PDF, and
+   after a run anything needing a check is marked there in red.
 2. **Draw a box** with the mouse around a value you want — say the model number.
    A new field appears on the right with the cursor already in its name, so just
    type the column name (`Model Ref`) and press Tab.
@@ -53,8 +55,10 @@ It handles both kinds of spec sheet:
    round it is the one that has them.
 7. **Press Run.** Every PDF is read in turn, with a progress bar. You get one row
    per PDF and one column per field.
-8. **Check the results.** Click any cell and the page it came from is redrawn
-   with that box on it, and the text it pulled out is printed underneath.
+8. **Check the results.** Rows are striped so a wide table stays readable.
+   Click any cell and the page it came from is redrawn with that box on it, the
+   text it pulled out is printed underneath, and the whole row is boxed in so
+   you can follow it across without losing your place.
    * A **yellow** cell means the box found nothing.
    * An **orange** cell with a `?` means the two readings of that scanned page
      disagreed about it — hover or click it to see both. This is nearly always
