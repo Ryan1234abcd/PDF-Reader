@@ -1,4 +1,17 @@
-# PDF Spec Sheet Extractor
+# PDF Spec Sheet Extractors
+
+Two separate tools, deliberately kept apart so neither gets bloated. Both are a
+single HTML file you double-click, and both share the same extraction engine,
+the same drawing and the same exports.
+
+| File | Use it when |
+| --- | --- |
+| **`pdf-spec-extractor.html`** | You have a **folder of separate PDFs**, one data sheet each. One row per file. |
+| **`merged-sheet-extractor.html`** | You have **one PDF with many data sheets merged into it**. One row per data sheet. |
+
+---
+
+# 1. Folder of PDFs — `pdf-spec-extractor.html`
 
 One file: **`pdf-spec-extractor.html`**. Double-click it. Nothing is installed,
 nothing is uploaded, no server runs — the PDFs are read inside your browser and
@@ -99,3 +112,45 @@ uses no browser storage, so keep that file somewhere you can find it.
 
 All the tunable settings — CDN address, colours, tolerances, CSV options — are
 grouped together in the `CONFIGURATION` block near the top of the file.
+
+
+---
+
+# 2. One merged PDF — `merged-sheet-extractor.html`
+
+Same idea, same everything — drawing, OCR, double-checking, column order,
+templates, CSV — except the input is a single PDF holding many data sheets, and
+a row comes out per data sheet instead of per file.
+
+## How to use it
+
+1. **Drop the merged PDF** on the drop zone.
+2. **Say where each data sheet starts.** Go to the first page of a sheet and
+   press **Start a data sheet on this page**; a thick red line appears across
+   the top of that page, like a page break in Word. If every sheet is the same
+   length — and they usually are — set **every N pages** and press **Mark them
+   all** instead. Page 1 always starts the first sheet.
+3. **Draw your boxes on the first data sheet** and name them, exactly as in the
+   other tool. Each field remembers which page *within* a data sheet it sits on
+   (**sheet page** 1 is the page the sheet starts on, 2 is the next), so the
+   same boxes are used at the same place on every sheet.
+4. **If one sheet is different**, switch the toolbar to **This data sheet only**.
+   Everything turns amber as a warning, and moving or resizing a box then
+   changes it *for that sheet alone* — the field list shows a "moved on sheet N"
+   badge with a **Reset** button, and the box is drawn with a dashed edge.
+   Switch back to **Every data sheet** for normal editing.
+5. **Press Run.** One row per data sheet, with the sheet number and its page
+   range as the last two columns.
+6. Everything else behaves as in the other tool: click a cell to see the page it
+   came from, orange `?` for OCR readings that disagreed, CSV export, and
+   templates. The template file also remembers where the sheet breaks are and
+   any per-sheet box tweaks, so next month's identical file needs one import.
+
+## If something breaks
+
+Everything in the table above applies here too. Two extra ones:
+
+| What you see | What to do |
+| --- | --- |
+| Every row is identical, or there is only one row | No breaks are marked, so the whole document counts as one data sheet. Mark them, or use **every N pages**. |
+| One data sheet's values are empty while the rest are fine | That sheet is laid out slightly differently. Go to it, switch to **This data sheet only**, and move the box; the other sheets are not affected. |

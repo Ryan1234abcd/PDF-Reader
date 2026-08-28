@@ -1,0 +1,2465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merged Spec Sheet Extractor</title>
+
+<!--
+================================================================================
+  MERGED SPEC SHEET EXTRACTOR  -  single file, no install, no server.
+================================================================================
+
+  This is the companion to pdf-spec-extractor.html. That one reads a FOLDER of
+  separate PDFs, one row per file. This one reads ONE PDF that has many data
+  sheets merged into it, one row per data sheet.
+
+  WHAT IT DOES
+    1. You drop the merged PDF onto the page.
+    2. You tell it where each data sheet starts, by marking a break on the first
+       page of each one - like a page break in Word. There is a button to put a
+       break every N pages when the sheets are all the same length.
+    3. You draw boxes on the first data sheet and name them (one box = one
+       column). The same boxes are then used on every data sheet, at the same
+       place on the same page WITHIN each sheet.
+    4. If one data sheet is laid out slightly differently, switch the toolbar to
+       "Change this data sheet only" and move the box there. The other sheets
+       keep the standard position.
+    5. You press Run. One row of data comes out per data sheet.
+    6. You export the table as CSV and the boxes as a template JSON file.
+
+  SCANNED (IMAGE-ONLY) SHEETS
+    Some suppliers send sheets that are pictures of a page rather than real
+    text - nothing in them can be selected or copied. Those are read with OCR
+    (optical character recognition), which is built in and switched to "Auto":
+    the text layer is used when there is one, and OCR is used only when there
+    is not. See the OCR notes further down if OCR cannot start.
+
+  --------------------------------------------------------------------------
+  IF THE PDF LIBRARY IS BLOCKED BY YOUR NETWORK  (READ THIS FIRST)
+  --------------------------------------------------------------------------
+  This page loads PDF.js from a public CDN (the two <script>/URL lines below).
+  If your work network blocks CDNs you will see a red "PDF library did not
+  load" banner. To fix it WITHOUT installing anything:
+
+    STEP 1. On any machine with internet, download these two files from
+              https://cdnjs.com/libraries/pdf.js/3.11.174
+            (or from https://mozilla.github.io/pdf.js/getting_started/ )
+
+              pdf.min.js
+              pdf.worker.min.js
+
+    STEP 2. Put both files in the SAME FOLDER as this HTML file.
+
+    STEP 3. Change the two marked lines below:
+
+              (a) the <script src="..."> tag a few lines down:
+                    <script src="pdf.min.js"></script>
+
+              (b) the PDFJS_WORKER_URL constant in the CONFIG block:
+                    const PDFJS_WORKER_URL = 'pdf.worker.min.js';
+
+            and, if you also handle Chinese/Japanese/Korean spec sheets,
+            download the "cmaps" folder alongside and set:
+                    const PDFJS_CMAP_URL = 'cmaps/';
+
+    That is all. Nothing is installed; the files just sit next to this one.
+
+  --------------------------------------------------------------------------
+  THE SAME AGAIN, FOR THE OCR ENGINE (only needed for scanned sheets)
+  --------------------------------------------------------------------------
+  OCR uses Tesseract.js, also from a CDN. If it is blocked you will see
+  "OCR engine could not start" on the status line. To use local copies,
+  download these four files and put them next to this HTML file:
+
+      tesseract.min.js                  from https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/
+      worker.min.js                     from the same place (rename it tesseract-worker.min.js)
+      tesseract-core-simd-lstm.wasm.js  from https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/
+      eng.traineddata.gz                from https://tessdata.projectnaptha.com/4.0.0/
+
+  then change the TESSERACT_* constants in the CONFIG block to:
+
+      const TESSERACT_JS_URL     = 'tesseract.min.js';
+      const TESSERACT_WORKER_URL = 'tesseract-worker.min.js';
+      const TESSERACT_CORE_PATH  = './';
+      const TESSERACT_LANG_PATH  = './';
+
+  IMPORTANT - please read this bit, it will save you an hour:
+  Chrome will not let a double-clicked page load those local helper files
+  (it blocks file-to-file loading for security). The PDF side copes with this
+  on its own, but OCR does not: it will simply never finish. So local OCR
+  files only work if the page is opened in a Chrome started with the switch
+
+      chrome.exe --allow-file-access-from-files "C:\path\to\pdf-spec-extractor.html"
+
+  (make a desktop shortcut with that switch - nothing is installed). If your
+  network allows the CDN, none of this applies: leave the constants alone.
+  --------------------------------------------------------------------------
+-->
+
+<!-- (a) PDF.js main library. Swap this src for "pdf.min.js" to run locally. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+<style>
+/* ---------------------------------------------------------------------------
+   Plain, functional styling. This is a work tool, not a showcase.
+   --------------------------------------------------------------------------- */
+:root{
+  --line:#c8ccd2;
+  --ink:#1b1f24;
+  --muted:#5c6672;
+  --panel:#f6f7f9;
+  --accent:#0b63ce;
+  --box:#0b63ce;              /* colour of a normal drawn box            */
+  --box-selected:#c62828;     /* colour of the currently selected box    */
+  --warn-bg:#fff6d6;          /* empty cell highlight                    */
+  --error-bg:#ffdcdc;         /* failed cell / row highlight             */
+  --ocr-bg:#eaf3ff;           /* cell whose text came from OCR           */
+  --check-bg:#ffe8cc;         /* two readings disagreed - check it       */
+  --stripe:#f4f6f8;           /* every other table row                   */
+  --row-active:#e3edfb;       /* the row you last clicked                */
+  --break:#b3261e;            /* the line marking a new data sheet       */
+  --override:#bf6e00;         /* a box moved for one data sheet only     */
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:14px;
+  font:13px/1.45 "Segoe UI", Arial, Helvetica, sans-serif;
+  color:var(--ink); background:#fff;
+}
+h1{font-size:17px; margin:0 0 10px}
+h2{font-size:13px; margin:0 0 6px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted)}
+button{
+  font:inherit; padding:5px 11px; border:1px solid var(--line);
+  background:#fff; border-radius:3px; cursor:pointer;
+}
+button:hover:not(:disabled){background:#eef2f7}
+button:disabled{opacity:.45; cursor:default}
+button.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+button.primary:hover:not(:disabled){background:#0a55b0}
+input[type=text], input[type=number]{
+  font:inherit; padding:3px 5px; border:1px solid var(--line); border-radius:3px;
+}
+.toolbar{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px}
+.spacer{flex:1}
+
+/* --- drop zone ---------------------------------------------------------- */
+#dropZone{
+  border:2px dashed var(--line); border-radius:5px; padding:14px;
+  text-align:center; color:var(--muted); background:var(--panel);
+  margin-bottom:10px; cursor:pointer;
+}
+#dropZone.hot{border-color:var(--accent); background:#e8f1fd; color:var(--accent)}
+
+/* --- status ------------------------------------------------------------- */
+#statusLine{
+  padding:6px 9px; background:var(--panel); border:1px solid var(--line);
+  border-radius:3px; margin-bottom:10px; font-variant-numeric:tabular-nums;
+}
+#statusLine .bad{color:#b3261e; font-weight:600}
+#progressOuter{height:6px; background:#e2e6eb; border-radius:3px; margin-top:6px; display:none}
+
+/* The list of loaded files is folded away, so a hundred of them cost one line
+   of the window until you want to see them. */
+#fileListBox{margin-top:5px}
+#fileListBox summary{cursor:pointer; color:var(--accent); font-size:12px}
+#fileList{
+  margin:6px 0 0; padding:0 0 0 26px; max-height:170px; overflow:auto;
+  border:1px solid var(--line); border-radius:3px; background:#fff;
+}
+#fileList li{padding:2px 4px 2px 0; font-size:12px}
+#fileList li span{cursor:pointer}
+#fileList li span:hover{text-decoration:underline; color:var(--accent)}
+#fileList li.showing{font-weight:700}
+#fileList li.flagged::marker{color:#b3261e}
+#fileList li.flagged span::after{content:' - needs checking'; color:#b3261e; font-weight:400}
+#progressInner{height:100%; width:0%; background:var(--accent); border-radius:3px}
+#banner{
+  display:none; padding:9px 11px; border:1px solid #d33; background:#ffecec;
+  color:#8b1a1a; border-radius:3px; margin-bottom:10px; white-space:pre-wrap;
+}
+
+/* --- main two-column layout --------------------------------------------- */
+.main{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap}
+.viewer{flex:1 1 620px; min-width:340px; overflow-x:auto}
+.side{flex:0 1 340px; min-width:280px}
+
+/* --- the page canvas and the box overlay sitting exactly on top of it ---- */
+#canvasWrap{
+  position:relative; display:inline-block; line-height:0;
+  border:1px solid var(--line); background:#fff;
+}
+#pageCanvas{display:block}
+#boxLayer{position:absolute; inset:0; cursor:crosshair}
+.fieldBox{
+  position:absolute; border:2px solid var(--box);
+  background:rgba(11,99,206,.10); cursor:move;
+}
+.fieldBox.selected{border-color:var(--box-selected); background:rgba(198,40,40,.12); z-index:5}
+.fieldBox .tag{
+  position:absolute; top:-17px; left:-2px; font-size:10px; line-height:14px;
+  padding:0 4px; background:var(--box); color:#fff; white-space:nowrap;
+  border-radius:2px; font-family:"Segoe UI",Arial,sans-serif;
+  display:none;                      /* out of the way while you read the page */
+}
+.fieldBox:hover .tag,
+.fieldBox.selected .tag,
+body.show-all-names .fieldBox .tag{display:block}
+.fieldBox:hover .tag{z-index:6}
+.fieldBox.selected .tag{background:var(--box-selected)}
+.fieldBox .handle{
+  position:absolute; width:9px; height:9px; background:#fff;
+  border:1px solid var(--box-selected);
+}
+
+#drawGhost{position:absolute; border:2px dashed var(--box-selected); background:rgba(198,40,40,.08); display:none}
+
+/* The thick line across the top of a page that starts a data sheet. */
+#breakLine{
+  position:absolute; left:0; right:0; top:0; height:5px;
+  background:var(--break); display:none; pointer-events:none;
+}
+#breakLine::after{
+  content:'START OF A DATA SHEET'; position:absolute; left:4px; top:5px;
+  font:700 10px "Segoe UI",Arial,sans-serif; color:#fff; background:var(--break);
+  padding:1px 5px; border-radius:0 0 3px 3px; letter-spacing:.05em;
+}
+#sheetLabel{
+  margin:0 0 6px; padding:4px 8px; border-radius:3px; font-size:12px;
+  background:var(--panel); border:1px solid var(--line);
+}
+#sheetLabel b{font-weight:700}
+/* While "this data sheet only" is on, the boxes and the switch turn amber, so
+   nobody edits one sheet thinking they are editing them all. */
+body.scope-sheet .fieldBox{border-color:var(--override); background:rgba(191,110,0,.10)}
+body.scope-sheet .fieldBox .tag{background:var(--override)}
+body.scope-sheet #sheetBar{outline:2px solid var(--override); outline-offset:3px; border-radius:4px}
+.fieldBox.overridden{border-style:dashed}
+.badge{
+  font-size:10px; padding:1px 5px; border-radius:8px; background:var(--override);
+  color:#fff; margin-left:4px; white-space:nowrap;
+}
+
+/* --- field list --------------------------------------------------------- */
+.fieldRow{
+  border:1px solid var(--line); border-radius:3px; padding:5px;
+  margin-bottom:4px; background:#fff; cursor:pointer;
+}
+.fieldRow.selected{border-color:var(--box-selected); background:#fff5f5}
+.fieldRow .top input[type=text]{font-weight:600}
+#fieldsPanel.active{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
+#reorderBar{display:flex; gap:6px; align-items:center; margin-bottom:7px}
+#reorderBar .note{color:var(--muted); font-size:11px}
+.fieldRow .top{display:flex; gap:6px; align-items:center}
+.fieldRow .top input[type=text]{flex:1; min-width:0}
+.hint{color:var(--muted); font-size:12px; margin:4px 0 10px}
+
+/* --- results table ------------------------------------------------------ */
+#tableWrap{margin-top:16px; overflow:auto; max-height:52vh; border:1px solid var(--line)}
+table{border-collapse:collapse; width:100%; font-size:12px}
+th,td{border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top}
+th{background:var(--panel); position:sticky; top:0; z-index:2; white-space:nowrap}
+td{max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer}
+
+/* Every other row is tinted, which makes a wide table much easier to follow.
+   Cells with something to say paint over the stripe with their own colour. */
+tbody tr:nth-child(even){background:var(--stripe)}
+tbody tr.rowActive{background:var(--row-active)}
+
+td.ocr{background:var(--ocr-bg)}
+td.check{background:var(--check-bg)}
+td.check::after{content:' ?'; color:#a35400; font-weight:700}
+td.empty{background:var(--warn-bg)}
+td.error{background:var(--error-bg); color:#8b1a1a; font-style:italic}
+td.file{font-weight:600}
+tr.rowFlagged td.file{background:var(--error-bg)}
+
+/* The row you last clicked is boxed in, so the value you are checking can be
+   followed all the way across without losing your place. The outline is used
+   rather than a background so the cell colours above still show through. */
+tbody tr.rowActive td{border-top:2px solid var(--accent); border-bottom:2px solid var(--accent)}
+tbody tr.rowActive td:first-child{border-left:2px solid var(--accent)}
+tbody tr.rowActive td:last-child{border-right:2px solid var(--accent)}
+td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
+
+/* --- preview panel ------------------------------------------------------ */
+#previewInfo{
+  margin-top:8px; padding:7px 9px; background:var(--panel);
+  border:1px solid var(--line); border-radius:3px; font-size:12px;
+  white-space:pre-wrap; word-break:break-word; display:none;
+}
+#previewInfo b{font-weight:600}
+.pager{display:flex; gap:6px; align-items:center; margin:8px 0}
+</style>
+</head>
+<body>
+
+<h1>Merged Spec Sheet Extractor <span style="font-size:12px;font-weight:400;color:var(--muted)">&mdash; one PDF containing many data sheets</span></h1>
+
+<div id="banner"></div>
+
+<!-- Top: drop zone + the four buttons ------------------------------------- -->
+<!-- The hidden file inputs deliberately live OUTSIDE the drop zone. Inside it,
+     the click that opens one of them would bubble up to the drop zone, whose own
+     click handler would then open a second file dialog on top of the first. -->
+<input type="file" id="filePicker" accept="application/pdf,.pdf" style="display:none">
+<input type="file" id="templatePicker" style="display:none">
+
+<div id="dropZone">
+  <b>Drop the merged PDF here</b> &mdash; or click to choose it.
+  A template <b>.json</b> file can be dropped here too.
+  <div style="margin-top:6px">
+    <button type="button" id="btnPickFile">Choose PDF&hellip;</button>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button type="button" id="btnImportTemplate">Import Template</button>
+  <label title="The name this template is saved under, and the name of the file">
+    <input type="text" id="templateName" placeholder="Template name" size="18">
+  </label>
+  <button type="button" id="btnExportTemplate" disabled>Export Template</button>
+  <button type="button" id="btnRun" class="primary" disabled>Run</button>
+  <label title="What to do with scanned sheets that contain no real text">
+    Scanned sheets:
+    <select id="ocrMode">
+      <option value="auto" selected>OCR only when needed</option>
+      <option value="always">Always use OCR</option>
+      <option value="never">Never use OCR</option>
+    </select>
+  </label>
+  <label title="Read every scanned page twice and flag anything the two readings disagree about. Twice as slow, and the only reliable way to catch a decimal point that OCR could not see.">
+    <input type="checkbox" id="ocrDoubleCheck" checked> Double-check scans
+  </label>
+  <button type="button" id="btnExportCsv" disabled>Export CSV</button>
+  <span class="spacer"></span>
+  <button type="button" id="btnClearAll">Clear everything</button>
+</div>
+
+<div id="statusLine">
+  <span id="statusText">No PDF open. No template loaded.</span>
+  <div id="progressOuter"><div id="progressInner"></div></div>
+  <details id="fileListBox">
+    <summary id="fileListSummary">No data sheets yet</summary>
+    <ol id="fileList"></ol>
+  </details>
+</div>
+
+<div class="toolbar" id="sheetBar">
+  <b>Data sheets:</b>
+  <button type="button" id="btnToggleBreak" disabled>Start a data sheet on this page</button>
+  <span class="spacer" style="flex:0 0 10px"></span>
+  <label title="When every data sheet is the same length, mark them all in one go">
+    every <input type="number" id="breakEvery" value="2" min="1" step="1" style="width:52px"> pages
+    <button type="button" id="btnBreakEvery" disabled>Mark them all</button>
+  </label>
+  <button type="button" id="btnClearBreaks" disabled>Clear the marks</button>
+  <span class="spacer"></span>
+  <label title="Moving a box normally moves it on every data sheet. Switch this when one sheet is laid out differently.">
+    Changes apply to:
+    <select id="editScope">
+      <option value="all" selected>Every data sheet</option>
+      <option value="sheet">This data sheet only</option>
+    </select>
+  </label>
+</div>
+
+<div class="main">
+  <!-- LEFT: the page image you draw on -->
+  <div class="viewer">
+    <h2>Page view <span id="viewerSubject" style="text-transform:none;font-weight:400"></span></h2>
+    <div class="pager">
+      <button type="button" id="btnPrevSheet" title="Go to the previous data sheet">&laquo; Sheet</button>
+      <button type="button" id="btnPrevPage">&larr; Prev</button>
+      <span id="pageLabel">page &ndash; / &ndash;</span>
+      <button type="button" id="btnNextPage">Next &rarr;</button>
+      <button type="button" id="btnNextSheet" title="Go to the next data sheet">Sheet &raquo;</button>
+      <span style="width:12px"></span>
+      <button type="button" id="btnZoomOut">&minus;</button>
+      <button type="button" id="btnZoomIn">+</button>
+      <span id="zoomLabel">100%</span>
+      <span style="width:12px"></span>
+      <label title="Names always cover part of the page. Leave this off and a name only appears when you point at its box or select it.">
+        <input type="checkbox" id="showNames"> Show all box names
+      </label>
+    </div>
+    <div id="sheetLabel">No data sheets marked yet</div>
+    <div id="canvasWrap">
+      <canvas id="pageCanvas" width="10" height="10"></canvas>
+      <div id="boxLayer"><div id="drawGhost"></div><div id="breakLine"></div></div>
+    </div>
+    <div id="previewInfo"></div>
+  </div>
+
+  <!-- RIGHT: the list of fields (columns) -->
+  <div class="side" id="fieldsPanel" tabindex="0">
+    <h2>Fields / columns <span style="text-transform:none;font-weight:400;color:var(--muted)">&mdash; top of the list is the left-most column</span></h2>
+    <div class="hint">
+      Drag on the page image to draw a box, then type its name. The same box is
+      then used on every data sheet, on the same page within each one. Only what
+      is really inside a box is read: draw it around the number alone and the
+      unit beside it (&deg;C, K, kW) is left out.
+      <br>Click the page image, then the arrow keys <b>nudge</b> the selected box.
+      Click a field below, then the arrow keys <b>move the column</b> up and down.
+      Ctrl+click (or Shift+click) to pick several at once.
+    </div>
+    <div id="reorderBar">
+      <button type="button" id="btnMoveUp" title="Move the selected columns left">&uarr; Move up</button>
+      <button type="button" id="btnMoveDown" title="Move the selected columns right">&darr; Move down</button>
+      <span class="note" id="selectionNote"></span>
+    </div>
+    <div id="fieldList"></div>
+    <div class="hint" id="fieldEmptyHint">No fields yet.</div>
+    <div class="hint">
+      <b>Sheet page</b> is the page <i>within</i> a data sheet: 1 is the page the
+      data sheet starts on, 2 is the one after it.
+    </div>
+  </div>
+</div>
+
+<h2 style="margin-top:18px">Results</h2>
+<div id="tableWrap"><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
+<div class="hint">
+  One row per data sheet. Click any cell to see the page it came from, with the box
+  drawn on it and the text that was pulled out.
+  Yellow&nbsp;= nothing found. Blue&nbsp;= read by OCR. Orange&nbsp;<b>?</b>&nbsp;= the two
+  readings of that scanned page disagreed, so check that one.
+  Red&nbsp;= could not be read (the page does not exist, or OCR was off or unavailable).
+</div>
+
+<script>
+"use strict";
+
+/* ===========================================================================
+   1. CONFIGURATION  -  every tunable knob lives here.
+   =========================================================================== */
+
+/* (b) The PDF.js background worker. Change to 'pdf.worker.min.js' to run from
+       a local copy sitting next to this HTML file (see the note at the top). */
+const PDFJS_WORKER_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+/* Character maps, only needed for Chinese / Japanese / Korean documents.
+   For a local copy use a folder next to this file, e.g. 'cmaps/'. */
+const PDFJS_CMAP_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/';
+
+/* --- OCR, for scanned (image-only) sheets --------------------------------- */
+
+/* The OCR engine is only downloaded the first time a scanned page is met, so
+   ordinary text PDFs never pay for it. To use local copies of these four
+   files, see the OCR note in the comment at the top of this file. */
+const TESSERACT_JS_URL     = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+const TESSERACT_WORKER_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js';
+const TESSERACT_CORE_PATH  = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/';
+const TESSERACT_LANG_PATH  = 'https://tessdata.projectnaptha.com/4.0.0';
+const OCR_LANGUAGE         = 'eng';
+
+/* How big the page is drawn before it is handed to OCR. Higher is more
+   accurate and slower; 5 is about 360 dots per inch, which reads small
+   decimal points ("2.0" rather than "20") reliably on A4 sheets.
+   Drop to 4 if a very large batch makes the browser run short of memory. */
+const OCR_PAGE_SCALE = 5;
+
+/* Tesseract's page layout mode. 3 = "work the layout out for yourself",
+   which suits these two-column spec sheets. */
+const OCR_PAGE_SEG_MODE = '3';
+
+/* READING EVERY SCANNED PAGE TWICE.
+   On a scan, a decimal point is two or three dark pixels, and whether it
+   survives depends on how the page happens to be turned into pixels - which
+   is why "5.0" can come out as "50". No single setting is right every time
+   (measured on a real sheet: some settings lose the point in one value, other
+   settings lose it in a different one), so instead the page is read a second
+   time at another size and the two readings are compared. Cells where they
+   disagree are marked "check" in orange: those are the ones worth your eye,
+   and everything else agreed twice over.
+
+   This is the starting position of the "Double-check scans" tick box in the
+   toolbar, which is where you turn it off when you want the speed instead. */
+const OCR_DOUBLE_CHECK      = true;
+const OCR_CHECK_PAGE_SCALE  = 7;    /* the size used for the second reading */
+const OCR_CHECK_CONTRAST    = 1.6;  /* 1 = leave alone; higher = harder blacks */
+
+/* OCR is given up on after these many milliseconds. This matters: when the
+   engine's files cannot be loaded it stalls silently rather than failing, and
+   without a time limit Run would appear to hang for ever. */
+const OCR_STARTUP_TIMEOUT_MS = 180000;   /* first use downloads ~15 MB       */
+const OCR_PAGE_TIMEOUT_MS    = 120000;   /* per page                         */
+
+/* The OCR language file is normally re-downloaded each session. Set this to
+   true to let the engine keep it in the browser's cache instead. It is off by
+   default because this page keeps nothing in browser storage, and because a
+   double-clicked page is not allowed to use that storage anyway. */
+const OCR_CACHE_LANGUAGE = false;
+
+/* --- extraction tuning --------------------------------------------------- */
+
+/* HOW TEXT IS MATCHED TO A BOX. This decides exactly what ends up in a cell.
+
+   'centre'  (the default) - a piece of text belongs to the box when its middle
+             point is inside it. This reads only what you drew a box around: a
+             value one row below stays out, even though its rectangle may graze
+             the bottom edge of your box.
+   'overlap' - the older, more forgiving rule: any text whose rectangle overlaps
+             the box by MIN_ITEM_OVERLAP counts. Useful if you would rather draw
+             rough boxes and put up with the odd extra word.                  */
+const MATCH_RULE = 'centre';
+
+/* Grows every box slightly before matching, as a fraction of the page size.
+   Left at 0 so a box means exactly what you drew. Raising it to, say, 0.002
+   (0.2% of the page) makes matching more forgiving - but on a dense sheet the
+   rows are only about 1.6% of the page apart, so a large value here will start
+   pulling in the row above and below. */
+const BOX_TOLERANCE = 0;
+
+/* Only used when MATCH_RULE is 'overlap': how much of a piece of text must be
+   inside the box before it counts. */
+const MIN_ITEM_OVERLAP = 0.3;
+
+/* On scanned sheets, OCR often glues a value to its unit and reports "4.0K" or
+   "5.0°C" as ONE word. When such a word only half sits in your box, this uses
+   the individual letter positions OCR also provides to keep just the letters
+   that are actually inside it - so a box drawn around the number alone yields
+   "4.0", not "4.0K". Turn it off to always take such words whole. */
+const OCR_TRIM_PART_WORDS = true;
+
+/* Two text items are treated as being on the SAME LINE when their vertical
+   positions are within this fraction of the page height of each other. */
+const LINE_MERGE_TOLERANCE = 0.006;
+
+/* Within a line, a gap wider than this (as a multiple of the text height)
+   is treated as a word space rather than as letters of the same word. */
+const WORD_GAP_RATIO = 0.22;
+
+/* --- drawing tuning ------------------------------------------------------ */
+const MIN_BOX_SIZE_PX   = 6;     /* smaller drags are ignored as stray clicks */
+const NUDGE_STEP        = 0.001; /* arrow key step, as a fraction of the page */
+const NUDGE_STEP_BIG    = 0.01;  /* with Shift held down                      */
+const DEFAULT_ZOOM      = 1.0;   /* 1.0 = fit the page to the panel width     */
+const ZOOM_STEP         = 0.25;
+const MAX_RENDER_SCALE  = 4;     /* safety cap so huge zoom cannot hang       */
+
+/* --- output tuning ------------------------------------------------------- */
+const CSV_ADD_BOM         = true;  /* helps Excel open UTF-8 correctly        */
+const TEMPLATE_FORMAT     = 'pdf-spec-extractor-template';
+const TEMPLATE_VERSION    = 1;
+
+/* Text written into a cell that could not be read at all. Empty matches stay
+   genuinely empty - they are highlighted instead of being filled with words. */
+const CELL_ERROR_TEXT = {
+  nopage : 'no such page',
+  notext : 'scanned page, OCR off',
+  check  : '',                       /* the value is shown; it is just flagged */
+  ocrempty:'OCR found nothing',
+  ocrfail: 'OCR unavailable',
+  docfail: 'could not open PDF'
+};
+
+
+/* ===========================================================================
+   2. APPLICATION STATE  -  everything the page currently knows.
+   =========================================================================== */
+
+const state = {
+  /* The one merged PDF that is open. */
+  doc      : null,
+  fileName : '',
+  pageCount: 0,
+  fileBytes: null,   /* kept so the batch run can open its own copy         */
+
+  /* Where each data sheet starts. Always sorted, always begins at page 1.
+     A break at page 5 means "page 5 is the first page of a new data sheet". */
+  breaks: [1],
+
+  /* [{id, name, pageInSheet, x, y, w, h, overrides}]
+     pageInSheet is 1 for the first page of a data sheet, 2 for the second,
+     and so on - NOT the page number in the merged file.
+     overrides maps a data sheet's number (0, 1, 2 ...) to its own rectangle,
+     used when one sheet is laid out differently from the rest. */
+  fields     : [],
+
+  rows       : [],    /* one result row per data sheet, built by Run          */
+  selectedIds: [],    /* ids of the field boxes currently selected            */
+
+  /* Which half of the screen the arrow keys belong to: the page view (where
+     they nudge the selected box) or the field list (where they move columns
+     up and down). Set by whichever you last clicked in. */
+  focusArea  : 'canvas',
+
+  /* what the canvas is showing right now */
+  view: {
+    pageNum   : 1,
+    zoom      : DEFAULT_ZOOM,
+    baseW     : 0,      /* page width  in PDF points, at scale 1, rotated     */
+    baseH     : 0       /* page height in PDF points, at scale 1, rotated     */
+  },
+
+  running: false,
+  message: '',   /* the one-off note shown at the end of the status line */
+
+  /* The OCR engine is started once and then re-used for the whole batch. */
+  ocr: {
+    scriptPromise: null,  /* the download of tesseract.js                    */
+    worker       : null,  /* the running engine                              */
+    failure      : null   /* set once it is known not to work, so we stop    */
+  }                       /* trying (and waiting) for every remaining sheet  */
+};
+
+let nextFieldId = 1;   /* simple counter used to give every box a unique id */
+
+
+/* ===========================================================================
+   2b. THE DATA SHEETS  -  working out where each one starts and ends.
+
+   The whole app hangs off this: the breaks list says which pages begin a data
+   sheet, and everything else (which boxes to show, what a row is, which page a
+   field lives on) is worked out from it.
+   =========================================================================== */
+
+/** Every data sheet in the document, as {number, startPage, endPage}. */
+function dataSheets(){
+  if (!state.pageCount) return [];
+
+  /* Tidy the marks: inside the document, no duplicates, always one at page 1. */
+  const starts = Array.from(new Set(
+      state.breaks.filter(p => p >= 1 && p <= state.pageCount).concat([1])
+    )).sort((a, b) => a - b);
+
+  return starts.map((start, i) => ({
+    number   : i + 1,
+    startPage: start,
+    endPage  : (i + 1 < starts.length ? starts[i + 1] : state.pageCount + 1) - 1
+  }));
+}
+
+/** Which data sheet a page belongs to (0-based), or -1 if there are none. */
+function sheetIndexOfPage(pageNum){
+  const sheets = dataSheets();
+  for (let i = sheets.length - 1; i >= 0; i--){
+    if (pageNum >= sheets[i].startPage) return i;
+  }
+  return sheets.length ? 0 : -1;
+}
+
+/** The data sheet the page view is currently inside. */
+function currentSheetIndex(){
+  return sheetIndexOfPage(state.view.pageNum);
+}
+
+/** Is this page the first page of a data sheet? */
+function pageStartsASheet(pageNum){
+  return dataSheets().some(sheet => sheet.startPage === pageNum);
+}
+
+/** Which page of its own data sheet the given document page is (1, 2, 3 ...). */
+function pageWithinSheet(pageNum){
+  const sheets = dataSheets();
+  const i = sheetIndexOfPage(pageNum);
+  return i < 0 ? 1 : (pageNum - sheets[i].startPage + 1);
+}
+
+/**
+ * Where a field's box sits on one particular data sheet: its own rectangle if
+ * that sheet has been given one, otherwise the standard rectangle shared by
+ * every sheet.
+ */
+function rectForField(field, sheetIndex){
+  const own = field.overrides && field.overrides[sheetIndex];
+  return own ? own : { x: field.x, y: field.y, w: field.w, h: field.h };
+}
+
+/** Does this field have its own rectangle on this data sheet? */
+function hasOverride(field, sheetIndex){
+  return !!(field.overrides && field.overrides[sheetIndex]);
+}
+
+/**
+ * The rectangle that editing should write into. In "every data sheet" mode
+ * that is the field itself; in "this data sheet only" mode it is a copy kept
+ * for the sheet you are looking at, made from wherever the box is now.
+ */
+function editableRect(field, sheetIndex){
+  if ($('editScope').value !== 'sheet' || sheetIndex < 0) return field;
+  field.overrides = field.overrides || {};
+  if (!field.overrides[sheetIndex]){
+    const from = rectForField(field, sheetIndex);
+    field.overrides[sheetIndex] = { x: from.x, y: from.y, w: from.w, h: from.h };
+  }
+  return field.overrides[sheetIndex];
+}
+
+/** Put a field back to the standard position on this data sheet. */
+function clearOverride(field, sheetIndex){
+  if (field.overrides) delete field.overrides[sheetIndex];
+}
+
+
+/* ===========================================================================
+   3. SMALL HELPERS
+   =========================================================================== */
+
+const $ = (id) => document.getElementById(id);
+
+/** Keep a number inside a range. */
+function clamp(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
+
+/** Collapse all runs of whitespace to single spaces and trim the ends. */
+function normaliseWhitespace(s){
+  return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+}
+
+/** Two readings of the same value count as agreeing when they differ only in
+    spacing or letter case - "5.0 °C" and "5.0°C" are the same reading. */
+function normaliseForComparison(s){
+  return normaliseWhitespace(s).replace(/\s+/g, '').toLowerCase();
+}
+
+/** Show a red banner at the top of the page (used for real problems only). */
+function showBanner(message){
+  const b = $('banner');
+  b.textContent = message;
+  b.style.display = 'block';
+}
+
+/** Let the browser repaint - used inside long loops so the page never freezes. */
+function letBrowserBreathe(){
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/** Trigger a download of some text as a file, without any server. */
+function downloadTextFile(filename, text, mimeType){
+  const blob = new Blob([text], { type: mimeType || 'text/plain;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  /* Give the browser a moment to start the download before releasing the URL. */
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/** Today's date as 2026-08-28, used in suggested export file names. */
+function todayStamp(){
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+
+/* ===========================================================================
+   4. STARTING PDF.js
+   Loads the background worker. If the CDN is unreachable the page says so
+   plainly instead of failing silently.
+   =========================================================================== */
+
+async function setUpPdfJs(){
+  if (typeof pdfjsLib === 'undefined'){
+    showBanner(
+      'PDF library did not load.\n\n' +
+      'Your network has probably blocked the CDN. Open this file in a text ' +
+      'editor and follow the instructions in the comment at the very top: ' +
+      'download pdf.min.js and pdf.worker.min.js, put them next to this file, ' +
+      'and change the two marked lines. Nothing needs to be installed.'
+    );
+    return false;
+  }
+
+  /* Browsers refuse to start a worker directly from another website, so we
+     fetch the worker's code and start it from a local blob instead. If that
+     is blocked too we hand PDF.js the plain URL; it then falls back to doing
+     the work on the main thread - slower, but everything still works. */
+  try {
+    const res = await fetch(PDFJS_WORKER_URL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const code = await res.text();
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+  } catch (err){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  }
+  return true;
+}
+
+/**
+ * Open one PDF file with PDF.js.
+ * Note on locked-down PDFs: some suppliers set permission flags that stop
+ * Acrobat copying text. Those flags are advisory and PDF.js ignores them,
+ * so we deliberately do nothing special here - such files read fine.
+ */
+async function openPdfFromBytes(bytes){
+  const task = pdfjsLib.getDocument({
+    /* A copy, because PDF.js takes ownership of the buffer it is handed. */
+    data: bytes.slice(0),
+    cMapUrl: PDFJS_CMAP_URL,
+    cMapPacked: true,
+    /* An encrypted-but-not-password-protected file still opens; this simply
+       stops PDF.js prompting for a password on odd files. */
+    password: '',
+    isEvalSupported: false
+  });
+  return await task.promise;
+}
+
+
+/* ===========================================================================
+   5. TAKING IN THE MERGED PDF  -  one file, dropped or chosen.
+   =========================================================================== */
+
+const dropZone = $('dropZone');
+
+['dragenter','dragover'].forEach(ev =>
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.add('hot');
+  })
+);
+['dragleave','drop'].forEach(ev =>
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.remove('hot');
+  })
+);
+
+dropZone.addEventListener('drop', async (e) => {
+  const dropped = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+
+  /* A dropped template is loaded rather than treated as a PDF. */
+  for (const t of dropped.filter(f => /\.json$/i.test(f.name))) await loadTemplateFile(t);
+
+  const pdf = dropped.find(f => /\.pdf$/i.test(f.name));
+  if (pdf) await openMergedPdf(pdf);
+  else if (!dropped.some(f => /\.json$/i.test(f.name)))
+    updateStatus('That was not a PDF. Drop the merged PDF file here.');
+});
+
+$('btnPickFile').addEventListener('click', e => { e.stopPropagation(); $('filePicker').click(); });
+dropZone.addEventListener('click', (e) => {
+  /* Clicking the button inside must not also open a second chooser. */
+  if (e.target.closest('button, input')) return;
+  $('filePicker').click();
+});
+$('filePicker').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (file) await openMergedPdf(file);
+});
+
+/**
+ * Open the merged PDF and show its first page. The marks saying where each
+ * data sheet starts are kept if they still fit, so re-opening a corrected file
+ * does not throw away the work.
+ */
+async function openMergedPdf(file){
+  try {
+    updateStatus('Opening ' + file.name + '…');
+    if (state.doc){ try { await state.doc.destroy(); } catch (err) {} }
+
+    state.fileBytes = await file.arrayBuffer();
+    state.doc       = await openPdfFromBytes(state.fileBytes);
+    state.fileName  = file.name;
+    state.pageCount = state.doc.numPages;
+    state.rows      = [];
+    state.view.pageNum = 1;
+
+    /* Drop any marks that are past the end of this document. */
+    state.breaks = state.breaks.filter(p => p >= 1 && p <= state.pageCount);
+    if (!state.breaks.length) state.breaks = [1];
+
+    $('banner').style.display = 'none';
+    await showPage(1);
+    renderResultsTable();
+    updateStatus('Opened ' + file.name + ' - ' + state.pageCount + ' page' +
+      (state.pageCount === 1 ? '' : 's') + '. Mark where each data sheet starts.');
+  } catch (err){
+    state.doc = null; state.pageCount = 0;
+    showBanner('That PDF could not be opened: ' + err.message);
+  }
+  refreshButtons();
+}
+
+
+/* ===========================================================================
+   6. RENDERING A PAGE ONTO THE CANVAS
+
+   Coordinates, once and for all:
+   Every box is stored as four fractions of the page (x, y, w, h, each 0..1),
+   measured on the page AS IT IS MEANT TO BE VIEWED - that is, after PDF.js has
+   applied the page's /Rotate value. Because both the picture you draw on and
+   the text we extract are measured in that same rotated space, rotated pages
+   and slightly different paper sizes both look after themselves.
+   =========================================================================== */
+
+const canvas    = $('pageCanvas');
+const boxLayer  = $('boxLayer');
+const drawGhost = $('drawGhost');
+
+/** Draw one page of the merged PDF and put the boxes for its data sheet on it. */
+async function showPage(pageNum){
+  if (!state.doc) return;
+  state.view.pageNum = clamp(pageNum, 1, state.pageCount);
+
+  try {
+    const page = await state.doc.getPage(state.view.pageNum);
+
+    /* getViewport already includes the page's /Rotate value. */
+    const base = page.getViewport({ scale: 1 });
+    state.view.baseW = base.width;
+    state.view.baseH = base.height;
+
+    /* Fit the page to the width of the panel, then apply the zoom setting. */
+    const available = Math.max(300, $('canvasWrap').parentElement.clientWidth - 4);
+    const scale = clamp((available / base.width) * state.view.zoom, 0.05, MAX_RENDER_SCALE);
+    const viewport = page.getViewport({ scale: scale });
+
+    canvas.width  = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    canvas.style.width  = Math.floor(viewport.width) + 'px';
+    canvas.style.height = Math.floor(viewport.height) + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+
+    $('viewerSubject').textContent = '- ' + state.fileName;
+    $('pageLabel').textContent = 'page ' + state.view.pageNum + ' / ' + state.pageCount;
+    $('zoomLabel').textContent = Math.round(state.view.zoom * 100) + '%';
+    drawAllBoxes();
+    updateSheetLabel();
+    renderSheetList();
+    refreshButtons();
+  } catch (err){
+    updateStatus('Could not display page ' + state.view.pageNum + ' (' + err.message + ').');
+    refreshButtons();
+  }
+}
+
+/** The line telling you where you are: which data sheet, and which of its pages. */
+function updateSheetLabel(){
+  const sheets = dataSheets();
+  const label  = $('sheetLabel');
+
+  if (!state.doc){ label.textContent = 'No PDF open'; return; }
+  if (!sheets.length){ label.textContent = 'No data sheets marked yet'; return; }
+
+  const i     = currentSheetIndex();
+  const sheet = sheets[i];
+  const within = pageWithinSheet(state.view.pageNum);
+
+  label.innerHTML =
+    'Showing <b>data sheet ' + sheet.number + ' of ' + sheets.length + '</b>' +
+    ' (pages ' + sheet.startPage +
+    (sheet.endPage > sheet.startPage ? '&ndash;' + sheet.endPage : '') + ')' +
+    ' &nbsp;|&nbsp; this is <b>page ' + within + '</b> of that data sheet' +
+    (pageStartsASheet(state.view.pageNum) ? ' &nbsp;|&nbsp; a data sheet starts here' : '');
+
+  /* The thick red line across the top of a page that begins a data sheet. */
+  $('breakLine').style.display = pageStartsASheet(state.view.pageNum) ? 'block' : 'none';
+}
+
+/* --- page and data sheet navigation -------------------------------------- */
+
+$('btnPrevPage').addEventListener('click', () => showPage(state.view.pageNum - 1));
+$('btnNextPage').addEventListener('click', () => showPage(state.view.pageNum + 1));
+$('btnZoomIn').addEventListener('click',  () => { state.view.zoom = clamp(state.view.zoom + ZOOM_STEP, 0.25, 4); showPage(state.view.pageNum); });
+$('btnZoomOut').addEventListener('click', () => { state.view.zoom = clamp(state.view.zoom - ZOOM_STEP, 0.25, 4); showPage(state.view.pageNum); });
+
+$('btnPrevSheet').addEventListener('click', () => {
+  const sheets = dataSheets();
+  const i = currentSheetIndex();
+  /* If you are part way through a sheet, the first press goes to its start. */
+  if (i > 0 && state.view.pageNum === sheets[i].startPage) showPage(sheets[i - 1].startPage);
+  else if (i >= 0) showPage(sheets[i].startPage);
+});
+$('btnNextSheet').addEventListener('click', () => {
+  const sheets = dataSheets();
+  const i = currentSheetIndex();
+  if (i >= 0 && i + 1 < sheets.length) showPage(sheets[i + 1].startPage);
+});
+
+
+/* ===========================================================================
+   6b. MARKING WHERE EACH DATA SHEET STARTS
+   =========================================================================== */
+
+/** Put a break on this page, or take it away again. Page 1 always starts one. */
+$('btnToggleBreak').addEventListener('click', () => {
+  const page = state.view.pageNum;
+  if (page === 1){
+    updateStatus('Page 1 always starts the first data sheet, so its mark cannot be removed.');
+    return;
+  }
+  if (state.breaks.indexOf(page) >= 0){
+    state.breaks = state.breaks.filter(p => p !== page);
+    updateStatus('Removed the mark on page ' + page + '.');
+  } else {
+    state.breaks = state.breaks.concat([page]);
+    updateStatus('Page ' + page + ' now starts a data sheet.');
+  }
+  afterBreaksChanged();
+});
+
+/** Mark a break every N pages - for when every sheet is the same length. */
+$('btnBreakEvery').addEventListener('click', () => {
+  const every = Math.max(1, parseInt($('breakEvery').value, 10) || 1);
+  const marks = [];
+  for (let page = 1; page <= state.pageCount; page += every) marks.push(page);
+  state.breaks = marks;
+  afterBreaksChanged();
+  updateStatus('Marked a data sheet every ' + every + ' page' + (every === 1 ? '' : 's') +
+               ' - ' + dataSheets().length + ' data sheets.');
+});
+
+$('btnClearBreaks').addEventListener('click', () => {
+  state.breaks = [1];
+  afterBreaksChanged();
+  updateStatus('All the marks are gone; the whole document is one data sheet again.');
+});
+
+/** Everything that has to catch up when the breaks change. */
+function afterBreaksChanged(){
+  state.rows = [];
+  drawAllBoxes();
+  updateSheetLabel();
+  renderSheetList();
+  renderFieldList();
+  renderResultsTable();
+  refreshButtons();
+}
+
+/* Changing the edit scope re-colours the boxes, so the mode is never a guess. */
+$('editScope').addEventListener('change', () => {
+  document.body.classList.toggle('scope-sheet', $('editScope').value === 'sheet');
+  drawAllBoxes();
+  renderFieldList();
+});
+
+
+/* ===========================================================================
+   7. THE BOXES  -  drawing, selecting, moving, resizing, deleting.
+   Boxes are plain <div>s positioned in percentages, so they stay put when the
+   page is zoomed or the window is resized.
+   =========================================================================== */
+
+/**
+ * Re-create every box element over the canvas. Only the fields belonging to
+ * this page OF THIS DATA SHEET are drawn - a field marked "page 2" appears on
+ * the second page of whichever data sheet you are looking at.
+ */
+function drawAllBoxes(){
+  /* Remove the old ones (but keep the dashed "ghost" used while drawing). */
+  Array.from(boxLayer.querySelectorAll('.fieldBox')).forEach(el => el.remove());
+  boxLayer.style.width  = canvas.style.width;
+  boxLayer.style.height = canvas.style.height;
+
+  const sheetIndex = currentSheetIndex();
+  const within     = pageWithinSheet(state.view.pageNum);
+
+  for (const field of state.fields){
+    if (field.pageInSheet !== within) continue;
+
+    const rect = rectForField(field, sheetIndex);
+    const el = document.createElement('div');
+    el.className = 'fieldBox';
+    el.dataset.id = field.id;
+    el.style.left   = (rect.x * 100) + '%';
+    el.style.top    = (rect.y * 100) + '%';
+    el.style.width  = (rect.w * 100) + '%';
+    el.style.height = (rect.h * 100) + '%';
+
+    /* A dashed edge means this data sheet has its own position for this box. */
+    if (hasOverride(field, sheetIndex)) el.classList.add('overridden');
+
+    if (isSelected(field.id)){
+      el.classList.add('selected');
+      addResizeHandles(el);
+    }
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.textContent = field.name + (hasOverride(field, sheetIndex) ? ' (this sheet)' : '');
+    el.appendChild(tag);
+
+    boxLayer.appendChild(el);
+  }
+}
+
+/** The eight little white squares on the selected box. */
+function addResizeHandles(el){
+  const spots = [
+    ['nw', 0,   0  ], ['n', 0.5, 0  ], ['ne', 1,   0  ],
+    ['w',  0,   0.5],                  ['e',  1,   0.5],
+    ['sw', 0,   1  ], ['s', 0.5, 1  ], ['se', 1,   1  ]
+  ];
+  for (const [dir, fx, fy] of spots){
+    const h = document.createElement('div');
+    h.className = 'handle';
+    h.dataset.dir = dir;
+    h.style.left = 'calc(' + (fx * 100) + '% - 5px)';
+    h.style.top  = 'calc(' + (fy * 100) + '% - 5px)';
+    h.style.cursor = dir + '-resize';
+    el.appendChild(h);
+  }
+}
+
+/* --- mouse handling ------------------------------------------------------ */
+
+let drag = null;   /* describes whatever the mouse is currently doing */
+
+boxLayer.addEventListener('mousedown', (e) => {
+  if (!state.doc) return;
+  const rect = boxLayer.getBoundingClientRect();
+  const startX = (e.clientX - rect.left) / rect.width;
+  const startY = (e.clientY - rect.top)  / rect.height;
+
+  const handle = e.target.closest('.handle');
+  const boxEl  = e.target.closest('.fieldBox');
+
+  if (handle && boxEl){
+    /* Resizing an existing box - on this sheet only, or on all of them,
+       depending on the switch in the toolbar. */
+    const field = findField(boxEl.dataset.id);
+    const rect  = editableRect(field, currentSheetIndex());
+    drag = { mode:'resize', dir:handle.dataset.dir, field, rect, startX, startY, orig:{...rect} };
+  } else if (boxEl){
+    /* Moving an existing box. */
+    const field = findField(boxEl.dataset.id);
+    selectField(field.id);
+    const rect = editableRect(field, currentSheetIndex());
+    drag = { mode:'move', field, rect, startX, startY, orig:{...rect} };
+  } else {
+    /* Empty space: start drawing a brand-new box. */
+    drag = { mode:'draw', startX, startY };
+    drawGhost.style.display = 'block';
+    drawGhost.style.left = (startX * 100) + '%';
+    drawGhost.style.top  = (startY * 100) + '%';
+    drawGhost.style.width = '0%';
+    drawGhost.style.height = '0%';
+  }
+  e.preventDefault();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!drag) return;
+  const rect = boxLayer.getBoundingClientRect();
+  const x = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+  const y = clamp((e.clientY - rect.top)  / rect.height, 0, 1);
+
+  if (drag.mode === 'draw'){
+    const left = Math.min(x, drag.startX), top = Math.min(y, drag.startY);
+    drawGhost.style.left   = (left * 100) + '%';
+    drawGhost.style.top    = (top  * 100) + '%';
+    drawGhost.style.width  = (Math.abs(x - drag.startX) * 100) + '%';
+    drawGhost.style.height = (Math.abs(y - drag.startY) * 100) + '%';
+    return;
+  }
+
+  const f = drag.rect, o = drag.orig;
+  if (drag.mode === 'move'){
+    f.x = clamp(o.x + (x - drag.startX), 0, 1 - o.w);
+    f.y = clamp(o.y + (y - drag.startY), 0, 1 - o.h);
+  } else if (drag.mode === 'resize'){
+    let left = o.x, top = o.y, right = o.x + o.w, bottom = o.y + o.h;
+    if (drag.dir.includes('w')) left   = clamp(x, 0, right  - 0.005);
+    if (drag.dir.includes('e')) right  = clamp(x, left + 0.005, 1);
+    if (drag.dir.includes('n')) top    = clamp(y, 0, bottom - 0.005);
+    if (drag.dir.includes('s')) bottom = clamp(y, top + 0.005, 1);
+    f.x = left; f.y = top; f.w = right - left; f.h = bottom - top;
+  }
+  drawAllBoxes();
+  renderFieldList();
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (!drag) return;
+  const finishing = drag;
+  drag = null;
+  drawGhost.style.display = 'none';
+
+  if (finishing.mode === 'draw'){
+    const rect = boxLayer.getBoundingClientRect();
+    const x = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    const y = clamp((e.clientY - rect.top)  / rect.height, 0, 1);
+    const wPx = Math.abs(x - finishing.startX) * rect.width;
+    const hPx = Math.abs(y - finishing.startY) * rect.height;
+
+    /* Ignore accidental clicks: they would create invisible zero-size boxes. */
+    if (wPx < MIN_BOX_SIZE_PX || hPx < MIN_BOX_SIZE_PX){
+      selectField(null);
+      drawAllBoxes(); renderFieldList();
+      return;
+    }
+    addField({
+      x: Math.min(x, finishing.startX),
+      y: Math.min(y, finishing.startY),
+      w: Math.abs(x - finishing.startX),
+      h: Math.abs(y - finishing.startY),
+      pageInSheet: pageWithinSheet(state.view.pageNum)
+    });
+  } else {
+    refreshButtons();   /* geometry changed, so old results are stale */
+  }
+});
+
+/*
+ * The arrow keys do one of two jobs, depending on which half of the screen you
+ * last clicked in:
+ *   page view  - nudge the selected box(es) around the page
+ *   field list - move the selected column(s) up and down the order
+ * Typing in a text box is never interrupted.
+ */
+window.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (!state.selectedIds.length) return;
+
+  const fields = selectedFields();
+  if (!fields.length) return;
+
+  /* --- in the field list: reorder the columns --- */
+  if (state.focusArea === 'list'){
+    if (e.key === 'ArrowUp')        { e.preventDefault(); moveSelectedFields(-1); return; }
+    if (e.key === 'ArrowDown')      { e.preventDefault(); moveSelectedFields(+1); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace'){
+      e.preventDefault();
+      fields.forEach(f => deleteField(f.id));
+      return;
+    }
+    return;
+  }
+
+  /* --- on the page: nudge every selected box together --- */
+  const step = e.shiftKey ? NUDGE_STEP_BIG : NUDGE_STEP;
+  const sheetIndex = currentSheetIndex();
+  let handled = true;
+
+  for (const field of fields){
+    const rect = editableRect(field, sheetIndex);
+    switch (e.key){
+      case 'ArrowLeft':  rect.x = clamp(rect.x - step, 0, 1 - rect.w); break;
+      case 'ArrowRight': rect.x = clamp(rect.x + step, 0, 1 - rect.w); break;
+      case 'ArrowUp':    rect.y = clamp(rect.y - step, 0, 1 - rect.h); break;
+      case 'ArrowDown':  rect.y = clamp(rect.y + step, 0, 1 - rect.h); break;
+      case 'Delete':
+      case 'Backspace':  deleteField(field.id); continue;
+      default: handled = false;
+    }
+  }
+  if (handled){ e.preventDefault(); drawAllBoxes(); renderFieldList(); }
+});
+
+/* Remember which half of the screen you are working in. */
+boxLayer.addEventListener('mousedown', () => {
+  state.focusArea = 'canvas';
+  updateSelectionNote();
+});
+$('fieldsPanel').addEventListener('mousedown', () => {
+  state.focusArea = 'list';
+  updateSelectionNote();
+});
+$('btnMoveUp').addEventListener('click',   () => moveSelectedFields(-1));
+$('btnMoveDown').addEventListener('click', () => moveSelectedFields(+1));
+
+
+/* ===========================================================================
+   8. THE FIELD LIST  -  one entry per column, editable.
+   =========================================================================== */
+
+function findField(id){
+  return state.fields.find(f => String(f.id) === String(id)) || null;
+}
+
+/* --- which fields are selected -------------------------------------------
+   More than one can be selected at a time, so several columns can be moved
+   (or several boxes nudged) together.                                      */
+
+function isSelected(id){
+  return state.selectedIds.some(sel => String(sel) === String(id));
+}
+
+/** The fields that are selected, in the order they appear in the list. */
+function selectedFields(){
+  return state.fields.filter(f => isSelected(f.id));
+}
+
+/** Select just this one (or nothing, when given null). */
+function selectField(id){
+  state.selectedIds = (id === null || id === undefined) ? [] : [id];
+  afterSelectionChanged();
+}
+
+/** Add to, or remove from, the selection - for Ctrl+click. */
+function toggleFieldSelected(id){
+  state.selectedIds = isSelected(id)
+    ? state.selectedIds.filter(sel => String(sel) !== String(id))
+    : state.selectedIds.concat([id]);
+  afterSelectionChanged();
+}
+
+/** Select everything between the last pick and this one - for Shift+click. */
+function extendSelectionTo(id){
+  const last = state.selectedIds[state.selectedIds.length - 1];
+  const from = state.fields.findIndex(f => String(f.id) === String(last));
+  const to   = state.fields.findIndex(f => String(f.id) === String(id));
+  if (from < 0 || to < 0) return selectField(id);
+  const [lo, hi] = from < to ? [from, to] : [to, from];
+  state.selectedIds = state.fields.slice(lo, hi + 1).map(f => f.id);
+  afterSelectionChanged();
+}
+
+function afterSelectionChanged(){
+  drawAllBoxes();
+  renderFieldList();
+  updateSelectionNote();
+}
+
+/** Say what is selected, and which half of the screen the arrows belong to. */
+function updateSelectionNote(){
+  const count = state.selectedIds.length;
+  const note  = count === 0 ? 'nothing selected'
+              : count + (count === 1 ? ' field selected' : ' fields selected');
+  const where = state.focusArea === 'list'
+    ? ' - arrows move columns'
+    : ' - arrows nudge the box';
+  $('selectionNote').textContent = note + (count ? where : '');
+  $('fieldsPanel').classList.toggle('active', state.focusArea === 'list');
+  $('btnMoveUp').disabled   = !count;
+  $('btnMoveDown').disabled = !count;
+}
+
+/**
+ * Move the selected fields one place up or down the list, which is the same
+ * as moving those columns left or right in the table and the CSV.
+ */
+function moveSelectedFields(direction){
+  if (!state.selectedIds.length) return;
+  const positions = state.fields
+    .map((f, i) => ({ f, i }))
+    .filter(entry => isSelected(entry.f.id))
+    .map(entry => entry.i);
+
+  /* Going up, deal with the topmost first; going down, the bottom-most. */
+  const order = direction < 0 ? positions : positions.slice().reverse();
+
+  for (const i of order){
+    const target = i + direction;
+    if (target < 0 || target >= state.fields.length) continue;
+    /* Do not step over another selected field - the block moves as one. */
+    if (isSelected(state.fields[target].id)) continue;
+    const moved = state.fields.splice(i, 1)[0];
+    state.fields.splice(target, 0, moved);
+  }
+  renderFieldList();
+  drawAllBoxes();
+  updateSelectionNote();
+  refreshButtons();
+}
+
+/**
+ * Make a field name unique. Duplicate column names are never allowed to
+ * silently overwrite each other - a numeric suffix is added instead.
+ */
+function makeUniqueName(wanted, ignoreId){
+  let base = normaliseWhitespace(wanted) || 'Field';
+  const taken = (n) => state.fields.some(f => f.id !== ignoreId && f.name.toLowerCase() === n.toLowerCase());
+  if (!taken(base)) return base;
+  let n = 2;
+  while (taken(base + ' (' + n + ')')) n++;
+  return base + ' (' + n + ')';
+}
+
+/** Create a new field from a freshly drawn rectangle. */
+function addField(rect){
+  const field = {
+    id  : nextFieldId++,
+    name: makeUniqueName('Field ' + (state.fields.length + 1)),
+    pageInSheet: rect.pageInSheet,
+    x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+    overrides: {}          /* filled in only where one sheet differs */
+  };
+  state.fields.push(field);
+  selectField(field.id);
+  drawAllBoxes();
+  renderFieldList();
+  refreshButtons();
+
+  /* Put the cursor straight into the new name so you can just type. */
+  const input = document.querySelector('.fieldRow[data-id="' + field.id + '"] input[type=text]');
+  if (input){ input.focus(); input.select(); }
+}
+
+function deleteField(id){
+  state.fields = state.fields.filter(f => String(f.id) !== String(id));
+  state.selectedIds = state.selectedIds.filter(sel => String(sel) !== String(id));
+  drawAllBoxes();
+  renderFieldList();
+  refreshButtons();
+}
+
+/**
+ * Rebuild the folded-away list of data sheets under the status line.
+ * Clicking one jumps to its first page.
+ */
+function renderSheetList(){
+  const list = $('fileList');
+  const box  = $('fileListBox');
+  const sheets = dataSheets();
+  list.innerHTML = '';
+
+  if (!sheets.length){
+    $('fileListSummary').textContent = 'No data sheets yet';
+    box.open = false;
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = '';
+  $('fileListSummary').textContent =
+    'Data sheets: ' + sheets.length + ' (click to show the list)';
+
+  const here = currentSheetIndex();
+  sheets.forEach((sheet, index) => {
+    const item = document.createElement('li');
+
+    /* After a Run, mark the sheets whose row needs a human eye. */
+    const row = state.rows[index];
+    if (row && row.flagged) item.className = 'flagged';
+    if (index === here) item.classList.add('showing');
+
+    const label = document.createElement('span');
+    label.textContent = 'pages ' + sheet.startPage +
+      (sheet.endPage > sheet.startPage ? '-' + sheet.endPage : '') +
+      ' (' + (sheet.endPage - sheet.startPage + 1) + ' page' +
+      (sheet.endPage === sheet.startPage ? '' : 's') + ')';
+    label.title = 'Show this data sheet';
+    label.addEventListener('click', () => showPage(sheet.startPage));
+    item.appendChild(label);
+    list.appendChild(item);
+  });
+}
+
+/** Rebuild the field list panel on the right. */
+function renderFieldList(){
+  const list = $('fieldList');
+  list.innerHTML = '';
+  $('fieldEmptyHint').style.display = state.fields.length ? 'none' : 'block';
+
+  for (const field of state.fields){
+    const row = document.createElement('div');
+    row.className = 'fieldRow' + (isSelected(field.id) ? ' selected' : '');
+    row.dataset.id = field.id;
+
+    /* --- name, page number, buttons --- */
+    const top = document.createElement('div');
+    top.className = 'top';
+
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.value = field.name;
+    name.title = 'Column name';
+    name.addEventListener('change', () => {
+      const unique = makeUniqueName(name.value, field.id);
+      if (unique !== normaliseWhitespace(name.value)){
+        updateStatus('That column name was already used, so it was saved as "' + unique + '".');
+      }
+      field.name = unique;
+      name.value = unique;
+      drawAllBoxes();
+      refreshButtons();
+    });
+
+    const pageLbl = document.createElement('span');
+    pageLbl.textContent = 'sheet page';
+    pageLbl.style.color = 'var(--muted)';
+
+    const page = document.createElement('input');
+    page.type = 'number'; page.min = '1'; page.step = '1';
+    page.value = field.pageInSheet; page.style.width = '46px';
+    page.title = 'Which page WITHIN each data sheet this value sits on ' +
+                 '(1 = the page the data sheet starts on)';
+    page.addEventListener('change', () => {
+      field.pageInSheet = Math.max(1, parseInt(page.value, 10) || 1);
+      page.value = field.pageInSheet;
+      drawAllBoxes(); refreshButtons();
+    });
+
+    const goto = document.createElement('button');
+    goto.type = 'button'; goto.textContent = 'View';
+    goto.title = 'Show this box on its page of the data sheet being viewed';
+    goto.addEventListener('click', () => {
+      selectField(field.id);
+      const sheets = dataSheets();
+      const sheet  = sheets[Math.max(0, currentSheetIndex())];
+      if (sheet) showPage(sheet.startPage + field.pageInSheet - 1);
+    });
+
+    const del = document.createElement('button');
+    del.type = 'button'; del.textContent = '×';
+    del.title = 'Delete this field';
+    del.addEventListener('click', () => deleteField(field.id));
+
+    top.append(name, pageLbl, page, goto, del);
+
+    /* When this data sheet has its own position for the box, say so and offer
+       to put it back to the standard one. */
+    const sheetIndex = currentSheetIndex();
+    if (hasOverride(field, sheetIndex)){
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = 'moved on sheet ' + (sheetIndex + 1);
+      const reset = document.createElement('button');
+      reset.type = 'button';
+      reset.textContent = 'Reset';
+      reset.title = 'Put this box back to the position used by every other data sheet';
+      reset.addEventListener('click', () => {
+        clearOverride(field, sheetIndex);
+        drawAllBoxes(); renderFieldList(); refreshButtons();
+      });
+      top.append(badge, reset);
+    }
+
+    /* The exact coordinates are not shown: the box on the page is the truth,
+       and leaving them out keeps many more fields visible in this list. */
+    row.append(top);
+
+    row.addEventListener('mousedown', (e) => {
+      if (e.target.tagName.toLowerCase() === 'button') return;
+      if (e.target.tagName.toLowerCase() === 'input')  { selectField(field.id); return; }
+      if (e.ctrlKey || e.metaKey)  toggleFieldSelected(field.id);
+      else if (e.shiftKey)         extendSelectionTo(field.id);
+      else                         selectField(field.id);
+    });
+    list.appendChild(row);
+  }
+}
+
+
+/* ===========================================================================
+   9. READING TEXT OUT OF A PAGE
+
+   PDF.js gives us every scrap of text on a page together with a matrix saying
+   where it sits. We turn each scrap into a plain rectangle measured in the
+   same fractions the boxes use, then keep the scraps that overlap the box.
+   =========================================================================== */
+
+/**
+ * Turn one PDF.js text item into { text, left, top, right, bottom, height },
+ * measured as fractions of the page (0..1), with (0,0) at the top-left of the
+ * page as it is displayed.
+ */
+function textItemToRect(item, viewport){
+  /* Combine the page's own transform with the text item's transform. The
+     result maps the text onto the displayed page, rotation included. */
+  const m = pdfjsLib.Util.transform(viewport.transform, item.transform);
+
+  /* Where the text starts (the left end of its baseline). */
+  const originX = m[4];
+  const originY = m[5];
+
+  /* Which way the text runs, and how tall it is. */
+  const angle  = Math.atan2(m[1], m[0]);
+  const height = Math.hypot(m[2], m[3]) || Math.abs(m[3]) || 1;
+  const width  = (item.width || 0) * viewport.scale;
+
+  /* Walk along the text direction, and up from the baseline. */
+  const alongX = Math.cos(angle),  alongY = Math.sin(angle);
+  const upX    = Math.sin(angle),  upY    = -Math.cos(angle);
+
+  const corners = [
+    [originX,                                originY                               ],
+    [originX + width * alongX,               originY + width * alongY              ],
+    [originX + height * upX,                 originY + height * upY                ],
+    [originX + width * alongX + height * upX, originY + width * alongY + height * upY]
+  ];
+
+  const xs = corners.map(c => c[0]);
+  const ys = corners.map(c => c[1]);
+
+  return {
+    text  : item.str,
+    left  : Math.min.apply(null, xs) / viewport.width,
+    right : Math.max.apply(null, xs) / viewport.width,
+    top   : Math.min.apply(null, ys) / viewport.height,
+    bottom: Math.max.apply(null, ys) / viewport.height,
+    height: height / viewport.height
+  };
+}
+
+/** How much of rectangle A's area lies inside rectangle B (0..1). */
+function overlapFraction(a, b){
+  const w = Math.min(a.right, b.right)   - Math.max(a.left, b.left);
+  const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  if (w <= 0 || h <= 0) return 0;
+  const areaA = Math.max(1e-9, (a.right - a.left) * (a.bottom - a.top));
+  return (w * h) / areaA;
+}
+
+/** Is the middle of this rectangle inside the box? */
+function centreIsInside(rect, box){
+  const midX = (rect.left + rect.right) / 2;
+  const midY = (rect.top + rect.bottom) / 2;
+  return midX >= box.left && midX <= box.right &&
+         midY >= box.top  && midY <= box.bottom;
+}
+
+/** The single test that decides whether one piece of text belongs to a box. */
+function isInsideBox(rect, box){
+  return MATCH_RULE === 'overlap'
+    ? overlapFraction(rect, box) > MIN_ITEM_OVERLAP
+    : centreIsInside(rect, box);
+}
+
+/**
+ * Decide what this piece of text contributes to a box.
+ *
+ * Returns null when it does not belong to the box at all. Normally it returns
+ * the piece unchanged. The interesting case is a piece that straddles the edge
+ * of the box: when OCR has given us the position of each individual letter we
+ * keep only the letters that are really inside, so a box drawn around the
+ * number in "4.0K" gives back "4.0" rather than "4.0K" or nothing.
+ */
+function clipItemToBox(item, box){
+  const letters = item.letters;
+
+  if (!OCR_TRIM_PART_WORDS || !letters || !letters.length){
+    return isInsideBox(item, box) ? item : null;
+  }
+
+  const kept = letters.filter(letter => isInsideBox(letter, box));
+  if (!kept.length) return null;
+
+  /* Wholly inside: hand back the original, with the text exactly as read. */
+  if (kept.length === letters.length) return item;
+
+  /* Partly inside: rebuild the piece from the letters that are inside. */
+  return {
+    text  : kept.map(l => l.text).join(''),
+    left  : Math.min.apply(null, kept.map(l => l.left)),
+    right : Math.max.apply(null, kept.map(l => l.right)),
+    top   : Math.min.apply(null, kept.map(l => l.top)),
+    bottom: Math.max.apply(null, kept.map(l => l.bottom)),
+    height: item.height
+  };
+}
+
+/** Everything inside one box, trimmed to the box, in the order it was found. */
+function itemsInsideBox(items, field){
+  const box = {
+    left  : field.x - BOX_TOLERANCE,
+    top   : field.y - BOX_TOLERANCE,
+    right : field.x + field.w + BOX_TOLERANCE,
+    bottom: field.y + field.h + BOX_TOLERANCE
+  };
+  const inside = [];
+  for (const item of items){
+    const clipped = clipItemToBox(item, box);
+    if (clipped && clipped.text.length) inside.push(clipped);
+  }
+  return inside;
+}
+
+/**
+ * Take the text scraps that fall inside one box, put them into reading order
+ * (top to bottom, then left to right) and join them into one tidy string.
+ */
+function joinItemsInReadingOrder(items){
+  if (!items.length) return '';
+
+  /* Sort roughly top-to-bottom first so lines can be grouped. */
+  const sorted = items.slice().sort((a, b) => (a.top - b.top) || (a.left - b.left));
+
+  const lines = [];
+  for (const item of sorted){
+    const line = lines.find(L => Math.abs(L.top - item.top) <= LINE_MERGE_TOLERANCE);
+    if (line){
+      line.items.push(item);
+      line.top = Math.min(line.top, item.top);
+    } else {
+      lines.push({ top: item.top, items: [item] });
+    }
+  }
+
+  lines.sort((a, b) => a.top - b.top);
+
+  const lineStrings = lines.map(line => {
+    line.items.sort((a, b) => a.left - b.left);
+    let out = '';
+    let prev = null;
+    for (const item of line.items){
+      if (prev){
+        /* A wide gap means a real space; a small one means the same word was
+           simply delivered in two pieces. */
+        const gap = item.left - prev.right;
+        const needsSpace = gap > (item.height || 0.01) * WORD_GAP_RATIO;
+        if (needsSpace && !/\s$/.test(out) && !/^\s/.test(item.text)) out += ' ';
+      }
+      out += item.text;
+      prev = item;
+    }
+    return normaliseWhitespace(out);
+  }).filter(s => s.length > 0);
+
+  /* Wrapped lines are joined with a single space. */
+  return normaliseWhitespace(lineStrings.join(' '));
+}
+
+/* ===========================================================================
+   9b. OCR  -  reading sheets that are pictures rather than text
+
+   Some suppliers send scans: the page is one big image and there is no text
+   in the file at all. For those we draw the page at high resolution and hand
+   it to Tesseract, which gives back every word it can see together with the
+   rectangle it sits in. Those rectangles are converted into exactly the same
+   fractions-of-the-page shape that the text layer produces, so from here on
+   the rest of the program cannot tell the difference and all the same box,
+   reading-order and joining rules apply.
+   =========================================================================== */
+
+/** Reject rather than wait for ever. A stalled OCR engine never errors by
+    itself, so every OCR step is wrapped in one of these. */
+function withTimeout(promise, milliseconds, whatFailed){
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error(whatFailed + ' timed out after ' +
+                             Math.round(milliseconds / 1000) + ' seconds')),
+      milliseconds))
+  ]);
+}
+
+/** Download the OCR library, once, only when it is actually needed. */
+function loadTesseractScript(){
+  if (state.ocr.scriptPromise) return state.ocr.scriptPromise;
+
+  state.ocr.scriptPromise = new Promise((resolve, reject) => {
+    if (typeof Tesseract !== 'undefined') return resolve();
+    const script = document.createElement('script');
+    script.src = TESSERACT_JS_URL;
+    script.onload  = () => (typeof Tesseract !== 'undefined')
+      ? resolve()
+      : reject(new Error('the OCR library loaded but did not start'));
+    script.onerror = () => reject(new Error('the OCR library could not be downloaded'));
+    document.head.appendChild(script);
+  });
+  return state.ocr.scriptPromise;
+}
+
+/**
+ * Start the OCR engine, or hand back the one already running.
+ * Once it has failed we remember that and stop trying, so a document of 200
+ * data sheets does not sit through the same three-minute wait 200 times.
+ */
+async function startOcrEngine(){
+  if (state.ocr.failure) throw new Error(state.ocr.failure);
+  if (state.ocr.worker)  return state.ocr.worker;
+
+  try {
+    updateStatus('Starting the OCR engine (the first scanned page also downloads the language file)…');
+    await withTimeout(loadTesseractScript(), OCR_STARTUP_TIMEOUT_MS, 'Downloading the OCR library');
+
+    const worker = await withTimeout(
+      Tesseract.createWorker(OCR_LANGUAGE, 1, {
+        workerPath  : TESSERACT_WORKER_URL,
+        corePath    : TESSERACT_CORE_PATH,
+        langPath    : TESSERACT_LANG_PATH,
+        cacheMethod : OCR_CACHE_LANGUAGE ? 'write' : 'none',
+        gzip        : true,
+        logger      : () => {}
+      }),
+      OCR_STARTUP_TIMEOUT_MS, 'Starting the OCR engine');
+
+    /* Telling Tesseract the true resolution measurably improves its reading
+       of small print such as the decimal point in "2.0". */
+    await worker.setParameters({
+      tessedit_pageseg_mode: OCR_PAGE_SEG_MODE,
+      user_defined_dpi     : String(Math.round(72 * OCR_PAGE_SCALE))
+    });
+
+    state.ocr.worker = worker;
+    updateStatus('');
+    return worker;
+  } catch (err){
+    state.ocr.failure =
+      'OCR engine could not start (' + err.message + '). ' +
+      'If your network blocks the CDN, see the OCR note at the top of this file.';
+    throw new Error(state.ocr.failure);
+  }
+}
+
+/** Make the darks darker and the lights lighter, which helps small marks
+    such as a decimal point survive being turned into black and white. */
+function boostCanvasContrast(canvas, amount){
+  if (!amount || amount === 1) return;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = image.data;
+  for (let i = 0; i < pixels.length; i += 4){
+    const grey = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+    const stretched = clamp((grey - 128) * amount + 128, 0, 255);
+    pixels[i] = pixels[i + 1] = pixels[i + 2] = stretched;
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
+/** Draw one page at OCR resolution onto a canvas that is not on screen. */
+async function renderPageForOcr(page, scale, contrast){
+  const viewport = page.getViewport({ scale: scale || OCR_PAGE_SCALE });
+  const canvas = document.createElement('canvas');
+  canvas.width  = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  const ctx = canvas.getContext('2d');
+  /* White behind the page: OCR reads dark-on-light far better than
+     dark-on-transparent, which some browsers hand over as dark-on-black. */
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+  boostCanvasContrast(canvas, contrast);
+  return canvas;
+}
+
+/**
+ * OCR one page and return its words in the same shape the text layer uses:
+ * { text, left, top, right, bottom, height }, all fractions of the page.
+ */
+async function ocrPageToItems(page, scale, contrast){
+  const worker = await startOcrEngine();
+  const canvas = await renderPageForOcr(page, scale, contrast);
+
+  /* Tell Tesseract the true resolution of what it is about to read. */
+  await worker.setParameters({
+    tessedit_pageseg_mode: OCR_PAGE_SEG_MODE,
+    user_defined_dpi     : String(Math.round(72 * (scale || OCR_PAGE_SCALE)))
+  });
+
+  try {
+    const result = await withTimeout(
+      worker.recognize(canvas, {}, { blocks: true, text: true }),
+      OCR_PAGE_TIMEOUT_MS, 'Reading a page with OCR');
+
+    /* Different versions of the engine put the words in different places, so
+       look in both: a flat list, or nested inside blocks and lines. */
+    const data = result.data;
+    let words = [];
+    if (data.words && data.words.length){
+      words = data.words;
+    } else {
+      (data.blocks || []).forEach(block =>
+        (block.paragraphs || []).forEach(para =>
+          (para.lines || []).forEach(line => {
+            words = words.concat(line.words || []);
+          })));
+    }
+
+    /* Keep each word AND the position of every letter in it. The letters are
+       what lets a box drawn around "4.0" leave the "K" of "4.0K" behind. */
+    const asFractions = (bbox) => ({
+      left  : bbox.x0 / canvas.width,
+      right : bbox.x1 / canvas.width,
+      top   : bbox.y0 / canvas.height,
+      bottom: bbox.y1 / canvas.height
+    });
+
+    return words
+      .filter(w => w && w.text && w.text.trim().length && w.bbox)
+      .map(w => {
+        const rect = asFractions(w.bbox);
+        return {
+          text   : w.text,
+          left   : rect.left,
+          right  : rect.right,
+          top    : rect.top,
+          bottom : rect.bottom,
+          height : rect.bottom - rect.top,
+          letters: (w.symbols || [])
+            .filter(sym => sym && sym.text && sym.text.length && sym.bbox)
+            .map(sym => Object.assign({ text: sym.text }, asFractions(sym.bbox)))
+        };
+      });
+  } finally {
+    /* Hand the memory back straight away - these canvases are large. */
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+/**
+ * Apply every field to ONE data sheet and return the finished row.
+ * Never throws: anything that goes wrong becomes a flagged cell instead.
+ *
+ * A field says which page of the data sheet it lives on, so page 2 of data
+ * sheet 3 might be page 6 of the merged document. A field can also have its
+ * own rectangle on this particular sheet.
+ */
+async function extractRowFromSheet(doc, sheetIndex, sheet, onProgress){
+  const row = {
+    sheetNumber: sheet.number,
+    pages      : sheet.startPage + (sheet.endPage > sheet.startPage ? '-' + sheet.endPage : ''),
+    startPage  : sheet.startPage,
+    cells      : {},
+    flagged    : false
+  };
+
+  /* Work page by page so each page is only fetched and read once. */
+  const byPage = new Map();
+  for (const field of state.fields){
+    const documentPage = sheet.startPage + field.pageInSheet - 1;
+    if (!byPage.has(documentPage)) byPage.set(documentPage, []);
+    byPage.get(documentPage).push(field);
+  }
+
+  for (const [pageNum, fields] of byPage){
+    /* The field points past the end of this data sheet, or of the document. */
+    if (pageNum > sheet.endPage || pageNum > doc.numPages){
+      for (const f of fields) row.cells[f.name] = { text:'', status:'nopage' };
+      row.flagged = true;
+      continue;
+    }
+
+    let page = null;
+    let items = [];
+    let usedOcr = false;
+
+    /* First try the text layer - instant, and exact when it is there. */
+    try {
+      page = await doc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1 });
+      const content = await page.getTextContent();
+      items = content.items
+        .filter(it => typeof it.str === 'string' && it.str.length)
+        .map(it => textItemToRect(it, viewport));
+    } catch (err){
+      items = [];
+    }
+
+    /* A scanned sheet has no text at all, so fall back to OCR - unless the
+       user has turned OCR off, or asked for it to be used on everything. */
+    const ocrMode = $('ocrMode').value;
+    const wantsOcr = page && (ocrMode === 'always' || (ocrMode === 'auto' && !items.length));
+    let checkItems = null;   /* the second, independent reading of the page */
+
+    if (wantsOcr){
+      try {
+        onProgress && onProgress('reading page ' + pageNum + ' with OCR');
+        items = await ocrPageToItems(page, OCR_PAGE_SCALE, 0);
+        usedOcr = true;
+
+        /* Read it again at a different size, so that anything the two
+           readings disagree about can be marked for checking. */
+        if ($('ocrDoubleCheck').checked && items.length){
+          onProgress && onProgress('checking page ' + pageNum + ' a second time');
+          checkItems = await ocrPageToItems(page, OCR_CHECK_PAGE_SCALE, OCR_CHECK_CONTRAST);
+        }
+      } catch (err){
+        for (const f of fields) row.cells[f.name] = { text:'', status:'ocrfail' };
+        row.flagged = true;
+        updateStatus(state.ocr.failure || err.message);
+        continue;
+      }
+    }
+
+    /* Still nothing. Either it is an image-only page and OCR is switched off,
+       or OCR ran and could not see a single word on it - say which. */
+    if (!items.length){
+      const why = usedOcr ? 'ocrempty' : 'notext';
+      for (const f of fields) row.cells[f.name] = { text:'', status:why };
+      row.flagged = true;
+      continue;
+    }
+
+    for (const field of fields){
+      /* Use this data sheet's own rectangle if it has been given one. */
+      const rect = rectForField(field, sheetIndex);
+      const text = joinItemsInReadingOrder(itemsInsideBox(items, rect));
+
+      const cell = {
+        text  : text,
+        status: text ? 'ok' : 'empty',
+        source: usedOcr ? 'ocr' : 'text',
+        page  : pageNum
+      };
+
+      /* Did the second reading of the page say the same thing? */
+      if (checkItems){
+        const second = joinItemsInReadingOrder(itemsInsideBox(checkItems, rect));
+        if (normaliseForComparison(second) !== normaliseForComparison(text)){
+          cell.status = 'check';
+          cell.otherReading = second;
+        }
+      }
+      row.cells[field.name] = cell;
+    }
+  }
+  return row;
+}
+
+
+/* ===========================================================================
+   10. RUN  -  loop over every loaded PDF and build the table.
+   =========================================================================== */
+
+$('btnRun').addEventListener('click', runExtraction);
+
+async function runExtraction(){
+  if (state.running) return;
+  const sheets = dataSheets();
+  if (!state.doc || !state.fields.length || !sheets.length) return;
+
+  state.running = true;
+  state.rows = [];
+  refreshButtons();
+  $('progressOuter').style.display = 'block';
+
+  /* The batch reads from its own copy of the document, so the page on screen
+     is left alone and nothing has to be reopened afterwards. */
+  let batchDoc = null;
+  try {
+    batchDoc = await openPdfFromBytes(state.fileBytes);
+
+    for (let i = 0; i < sheets.length; i++){
+      const sheet = sheets[i];
+      updateStatus('Reading data sheet ' + (i + 1) + ' of ' + sheets.length +
+                   ' (pages ' + sheet.startPage + '-' + sheet.endPage + ')');
+      $('progressInner').style.width = ((i / sheets.length) * 100).toFixed(1) + '%';
+
+      /* Let the browser repaint between sheets so nothing appears frozen. */
+      await letBrowserBreathe();
+
+      const row = await extractRowFromSheet(batchDoc, i, sheet, (note) => {
+        updateStatus('Data sheet ' + (i + 1) + ' of ' + sheets.length + ': ' + note);
+      });
+      state.rows.push(row);
+    }
+  } catch (err){
+    showBanner('The run stopped: ' + err.message);
+  } finally {
+    if (batchDoc){ try { await batchDoc.destroy(); } catch (e) {} }
+  }
+
+  $('progressInner').style.width = '100%';
+  setTimeout(() => { $('progressOuter').style.display = 'none'; }, 400);
+
+  state.running = false;
+  renderResultsTable();
+  renderSheetList();
+  /* Keep the explanation on screen if OCR could not be used - the cells only
+     say "OCR unavailable", which does not tell you what to do about it. */
+  updateStatus(state.ocr.failure || '');
+  refreshButtons();
+}
+
+
+/* ===========================================================================
+   11. THE RESULTS TABLE, AND CHECKING A CELL BY EYE
+   =========================================================================== */
+
+function renderResultsTable(){
+  const table = $('resultsTable');
+  const thead = table.tHead, tbody = table.tBodies[0];
+  thead.innerHTML = ''; tbody.innerHTML = '';
+  if (!state.rows.length) return;
+
+  /* Which data sheet a row came from goes last, so the columns you care
+     about come first. */
+  const headRow = thead.insertRow();
+  ['#'].concat(state.fields.map(f => f.name)).concat(['Data sheet', 'Pages'])
+    .forEach(label => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+
+  state.rows.forEach((row, rowIndex) => {
+    const tr = tbody.insertRow();
+    if (row.flagged) tr.className = 'rowFlagged';
+
+    const num = tr.insertCell();
+    num.textContent = rowIndex + 1;
+    num.style.cursor = 'default';
+
+    state.fields.forEach(field => {
+      const cell = row.cells[field.name] || { text:'', status:'empty' };
+      const td = tr.insertCell();
+      td.dataset.row = rowIndex;
+      td.dataset.field = field.id;
+
+      if (cell.status === 'ok'){
+        td.textContent = cell.text;
+        td.className = cell.source === 'ocr' ? 'ocr' : '';
+        td.title = cell.source === 'ocr'
+          ? cell.text + '  (read by OCR, and confirmed by a second reading)'
+          : cell.text;
+      } else if (cell.status === 'check'){
+        /* The value is shown, but the two readings of the page did not agree
+           about it - almost always a decimal point one of them could not see. */
+        td.textContent = cell.text;
+        td.className = 'check';
+        td.title = 'The two readings disagreed: "' + cell.text + '" and "' +
+                   (cell.otherReading || '(nothing)') + '". Check this one.';
+      } else if (cell.status === 'empty'){
+        td.className = 'empty';
+        td.textContent = '';
+        td.title = 'Nothing found inside this box';
+      } else {
+        td.className = 'error';
+        td.textContent = CELL_ERROR_TEXT[cell.status] || 'problem';
+        td.title = CELL_ERROR_TEXT[cell.status] || 'problem';
+      }
+      td.addEventListener('click', () => peekAtCell(rowIndex, field.id, td));
+    });
+
+    const sheetCell = tr.insertCell();
+    sheetCell.className = 'file';
+    sheetCell.textContent = row.sheetNumber;
+    sheetCell.style.cursor = 'default';
+
+    const pagesCell = tr.insertCell();
+    pagesCell.className = 'file';
+    pagesCell.textContent = row.pages;
+    pagesCell.title = 'Show this data sheet';
+    pagesCell.addEventListener('click', () => showPage(row.startPage));
+  });
+}
+
+/**
+ * Show the PDF page behind one cell, with that field's box drawn on it and
+ * the extracted text printed underneath, so the value can be checked by eye.
+ */
+async function peekAtCell(rowIndex, fieldId, tdElement){
+  const row   = state.rows[rowIndex];
+  const field = findField(fieldId);
+  if (!row || !field) return;
+
+  /* Mark the cell being checked, and box in the row it belongs to so the eye
+     can follow it right across a wide table. */
+  Array.from(document.querySelectorAll('td.peeking')).forEach(td => td.classList.remove('peeking'));
+  Array.from(document.querySelectorAll('tr.rowActive')).forEach(tr => tr.classList.remove('rowActive'));
+  if (tdElement){
+    tdElement.classList.add('peeking');
+    const tr = tdElement.closest('tr');
+    if (tr) tr.classList.add('rowActive');
+  }
+
+  selectField(field.id);
+  /* Go to the page this value was read from, inside its own data sheet. */
+  const cellForPage = row.cells[field.name];
+  const pageNum = (cellForPage && cellForPage.page) ||
+                  (row.startPage + field.pageInSheet - 1);
+  await showPage(pageNum);
+
+  const cell = row.cells[field.name] || { text:'', status:'empty' };
+  const info = $('previewInfo');
+  let explanation;
+  if (cell.status === 'ok')          explanation = cell.text;
+  else if (cell.status === 'check')  explanation = cell.text +
+        '     <-- the second reading of this page said "' +
+        (cell.otherReading || '(nothing)') + '", so please check it';
+  else if (cell.status === 'empty')  explanation = '(nothing found inside this box)';
+  else                               explanation = '(' + (CELL_ERROR_TEXT[cell.status] || 'problem') + ')';
+  const howItWasRead = cell.source === 'ocr' ? ' by OCR' : '';
+
+  info.style.display = 'block';
+  info.innerHTML = '';
+  const line1 = document.createElement('div');
+  line1.innerHTML = '<b>Data sheet ' + row.sheetNumber + '</b> (pages ' +
+                    escapeHtml(row.pages) + ') - field <b>' +
+                    escapeHtml(field.name) + '</b>, page ' + field.pageInSheet +
+                    ' of that sheet';
+  const line2 = document.createElement('div');
+  line2.style.marginTop = '4px';
+  line2.textContent = 'Extracted' + howItWasRead + ': ' + explanation;
+  info.append(line1, line2);
+}
+
+/** Escape the few characters that would otherwise be read as HTML. */
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+  ));
+}
+
+
+/* ===========================================================================
+   12. EXPORTS  -  CSV of the table, JSON of the template.
+   =========================================================================== */
+
+/**
+ * Wrap one value for CSV. Anything containing a comma, a quote, or a line
+ * break is put in double quotes, and inner quotes are doubled - the standard
+ * rule that Excel and Google Sheets both expect.
+ */
+function csvEscape(value){
+  const s = value == null ? '' : String(value);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+$('btnExportCsv').addEventListener('click', () => {
+  if (!state.rows.length) return;
+  /* Columns come out in the order of the field list, with the data sheet's
+     number and page range last. */
+  const header = state.fields.map(f => f.name).concat(['Data sheet', 'Pages']);
+  const lines  = [header.map(csvEscape).join(',')];
+
+  for (const row of state.rows){
+    const values = state.fields.map(f => {
+      const c = row.cells[f.name];
+      if (!c) return '';
+      /* A flagged-for-checking cell still has a perfectly good value in it.
+         Unreadable cells say why; empty ones stay genuinely empty. */
+      if (c.status === 'ok' || c.status === 'empty' || c.status === 'check') return c.text;
+      return CELL_ERROR_TEXT[c.status] || '';
+    });
+    lines.push(values.concat([row.sheetNumber, row.pages]).map(csvEscape).join(','));
+  }
+
+  const text = (CSV_ADD_BOM ? '﻿' : '') + lines.join('\r\n') + '\r\n';
+  downloadTextFile('schedule-' + todayStamp() + '.csv', text, 'text/csv;charset=utf-8');
+});
+
+/** Turn whatever was typed into something safe to use as a file name. */
+function asFileName(text, fallback){
+  const cleaned = normaliseWhitespace(text).replace(/[\\/:*?"<>|]/g, '-');
+  return cleaned || fallback;
+}
+
+$('btnExportTemplate').addEventListener('click', () => {
+  if (!state.fields.length) return;
+
+  const name = normaliseWhitespace($('templateName').value);
+  const template = {
+    format : TEMPLATE_FORMAT,
+    version: TEMPLATE_VERSION,
+    name   : name || 'Untitled template',
+    created: new Date().toISOString(),
+    note   : 'Coordinates are fractions of the page (0..1), measured on the page as displayed.',
+    /* The marks are saved as well as the boxes. They only make sense with a
+       document laid out the same way, but that is the usual case - the same
+       supplier sends the same merged file month after month. */
+    breaks : state.breaks.slice().sort((a, b) => a - b),
+    fields : state.fields.map(f => {
+      const out = {
+        name: f.name,
+        pageInSheet: f.pageInSheet,
+        x: +f.x.toFixed(6), y: +f.y.toFixed(6),
+        w: +f.w.toFixed(6), h: +f.h.toFixed(6)
+      };
+      /* Any data sheet that needed its box moved keeps its own rectangle. */
+      const tweaks = {};
+      for (const key in (f.overrides || {})){
+        const r = f.overrides[key];
+        tweaks[key] = { x:+r.x.toFixed(6), y:+r.y.toFixed(6),
+                        w:+r.w.toFixed(6), h:+r.h.toFixed(6) };
+      }
+      if (Object.keys(tweaks).length) out.overrides = tweaks;
+      return out;
+    })
+  };
+
+  const fileName = asFileName(name, 'spec-template-' + todayStamp()) + '.json';
+  downloadTextFile(fileName, JSON.stringify(template, null, 2), 'application/json');
+  updateStatus('Template saved as ' + fileName + '.');
+});
+
+$('btnImportTemplate').addEventListener('click', () => $('templatePicker').click());
+
+$('templatePicker').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';               /* allow picking the same file twice */
+  if (!file) return;
+  await loadTemplateFile(file);
+});
+
+/**
+ * Read a template out of a .json file, whether it was chosen with the button
+ * or dropped onto the page. Says plainly what happened either way.
+ */
+async function loadTemplateFile(file){
+  try {
+    const parsed = JSON.parse(await file.text());
+    const incoming = Array.isArray(parsed) ? parsed : parsed.fields;
+    if (!Array.isArray(incoming)) throw new Error('no "fields" list inside');
+
+    state.fields = [];
+    nextFieldId = 1;
+    for (const raw of incoming){
+      const field = {
+        id  : nextFieldId++,
+        name: '',
+        /* "page" is accepted as well, so a template written by the folder
+           version of this tool still loads. */
+        pageInSheet: Math.max(1, parseInt(raw.pageInSheet || raw.page, 10) || 1),
+        x: clamp(Number(raw.x) || 0, 0, 1),
+        y: clamp(Number(raw.y) || 0, 0, 1),
+        w: clamp(Number(raw.w) || 0, 0.002, 1),
+        h: clamp(Number(raw.h) || 0, 0.002, 1),
+        overrides: {}
+      };
+      field.w = Math.min(field.w, 1 - field.x);
+      field.h = Math.min(field.h, 1 - field.y);
+
+      for (const key in (raw.overrides || {})){
+        const r = raw.overrides[key] || {};
+        field.overrides[key] = {
+          x: clamp(Number(r.x) || 0, 0, 1),
+          y: clamp(Number(r.y) || 0, 0, 1),
+          w: clamp(Number(r.w) || 0, 0.002, 1),
+          h: clamp(Number(r.h) || 0, 0.002, 1)
+        };
+      }
+      state.fields.push(field);
+      /* Named after adding, so duplicates in the file get suffixed, not lost. */
+      field.name = makeUniqueName(raw.name || 'Field', field.id);
+    }
+    state.rows = [];
+    state.selectedIds = [];
+
+    /* Bring back where the data sheets start, if the file remembers. */
+    if (Array.isArray(parsed.breaks) && parsed.breaks.length){
+      state.breaks = parsed.breaks
+        .map(n => parseInt(n, 10))
+        .filter(n => n >= 1 && (!state.pageCount || n <= state.pageCount));
+      if (!state.breaks.length) state.breaks = [1];
+    }
+
+    /* Bring the template's own name back, so re-exporting keeps it. */
+    const savedName = normaliseWhitespace(parsed.name || '');
+    $('templateName').value = savedName ||
+      file.name.replace(/\.json$/i, '');
+
+    renderFieldList();
+    renderResultsTable();
+    drawAllBoxes();
+    refreshButtons();
+    $('banner').style.display = 'none';
+    updateStatus('Loaded template "' + $('templateName').value + '" - ' +
+                 state.fields.length + ' field(s)' +
+                 (state.doc ? '. Press Run.' : '. Now drop the merged PDF in.'));
+  } catch (err){
+    showBanner('That template file could not be read: ' + err.message +
+               '\n\nIt should be a .json file saved by this page - the one with ' +
+               '"fields" inside it, not the CSV.');
+  }
+}
+
+
+/* ===========================================================================
+   13. STATUS LINE, BUTTON STATES, AND STARTUP
+   =========================================================================== */
+
+function updateStatus(extraMessage){
+  /* Called with a string, the message is replaced; called with nothing, the
+     current message is left alone (button refreshes must not wipe it). */
+  if (extraMessage !== undefined) state.message = extraMessage;
+  const bits = [];
+  const sheets = dataSheets();
+
+  bits.push(state.doc
+    ? state.fileName + ' - ' + state.pageCount + ' page' + (state.pageCount === 1 ? '' : 's')
+    : 'No PDF open');
+  bits.push(sheets.length + ' data sheet' + (sheets.length === 1 ? '' : 's'));
+  bits.push(state.fields.length + ' field' + (state.fields.length === 1 ? '' : 's') + ' in template');
+
+  if (state.rows.length){
+    const flagged = state.rows.filter(r => r.flagged).length;
+    const empties = state.rows.reduce((n, r) =>
+      n + Object.values(r.cells).filter(c => c.status === 'empty').length, 0);
+    const ocrCells = state.rows.reduce((n, r) =>
+      n + Object.values(r.cells).filter(c => c.source === 'ocr' &&
+          (c.status === 'ok' || c.status === 'check')).length, 0);
+    const toCheck = state.rows.reduce((n, r) =>
+      n + Object.values(r.cells).filter(c => c.status === 'check').length, 0);
+
+    let line = state.rows.length + ' row' + (state.rows.length === 1 ? '' : 's') + ' extracted';
+    if (empties) line += ', ' + empties + ' empty cell' + (empties === 1 ? '' : 's');
+    if (ocrCells) line += ', ' + ocrCells + ' read by OCR';
+    if (toCheck)  line += ', ' + toCheck + ' to check';
+    bits.push(line);
+    if (flagged) bits.push('<span class="bad">' + flagged + ' row(s) need manual checking</span>');
+  }
+
+  $('statusText').innerHTML = bits.join(' &nbsp;|&nbsp; ') +
+    (state.message ? ' &nbsp;|&nbsp; ' + escapeHtml(state.message) : '');
+}
+
+function refreshButtons(){
+  const sheets = dataSheets();
+  const open   = !!state.doc;
+
+  $('btnRun').disabled            = state.running || !open || !state.fields.length || !sheets.length;
+  $('btnExportCsv').disabled      = state.running || !state.rows.length;
+  $('btnExportTemplate').disabled = state.running || !state.fields.length;
+  $('ocrMode').disabled           = state.running;
+  $('ocrDoubleCheck').disabled    = state.running;
+
+  $('btnPrevPage').disabled  = !open || state.view.pageNum <= 1;
+  $('btnNextPage').disabled  = !open || state.view.pageNum >= state.pageCount;
+  $('btnPrevSheet').disabled = !open || currentSheetIndex() <= 0 &&
+                               state.view.pageNum === (sheets[0] ? sheets[0].startPage : 1);
+  $('btnNextSheet').disabled = !open || currentSheetIndex() >= sheets.length - 1;
+
+  $('btnToggleBreak').disabled = !open || state.running;
+  $('btnBreakEvery').disabled  = !open || state.running;
+  $('btnClearBreaks').disabled = !open || state.running || state.breaks.length <= 1;
+  $('editScope').disabled      = state.running;
+
+  /* The break button says which of the two things it will do. */
+  if (open){
+    $('btnToggleBreak').textContent = pageStartsASheet(state.view.pageNum)
+      ? 'Remove the mark on this page'
+      : 'Start a data sheet on this page';
+  }
+  updateSelectionNote();
+  updateStatus();
+}
+
+$('btnClearAll').addEventListener('click', async () => {
+  if (state.doc){ try { await state.doc.destroy(); } catch (e) {} }
+  state.doc = null; state.fileBytes = null; state.fileName = '';
+  state.pageCount = 0; state.breaks = [1];
+  state.fields = []; state.rows = [];
+  state.selectedIds = []; nextFieldId = 1; state.message = '';
+  state.view.pageNum = 1;
+  if (state.ocr.worker){ try { await state.ocr.worker.terminate(); } catch (e) {} }
+  state.ocr.worker = null; state.ocr.failure = null;
+
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  canvas.width = 10; canvas.height = 10;
+  canvas.style.width = ''; canvas.style.height = '';
+  $('viewerSubject').textContent = '';
+  $('pageLabel').textContent = 'page - / -';
+  $('previewInfo').style.display = 'none';
+  $('breakLine').style.display = 'none';
+  drawAllBoxes(); renderFieldList(); renderResultsTable();
+  renderSheetList(); updateSheetLabel(); refreshButtons();
+});
+
+/* Re-fit the page when the window changes size (waiting until it settles). */
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  if (!state.doc || state.running) return;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => showPage(state.view.pageNum), 200);
+});
+
+/* Nothing is ever written to localStorage or any other browser storage:
+   the exported template JSON file is the only place anything is kept. */
+
+$('ocrDoubleCheck').checked = OCR_DOUBLE_CHECK;
+
+/* Box names are normally out of the way; point at a box (or select it) to see
+   its name, or tick the box in the toolbar to show them all at once. */
+$('showNames').addEventListener('change', () => {
+  document.body.classList.toggle('show-all-names', $('showNames').checked);
+});
+
+setUpPdfJs().then(() => {
+  renderSheetList();
+  updateSheetLabel();
+  renderFieldList();
+  updateSelectionNote();
+  refreshButtons();
+});
+
+</script>
+</body>
+</html>
