@@ -283,6 +283,8 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
       Drag on the page image to draw a box, then type its name.
       A box belongs to the page number shown beside it.
       Select a box and use the arrow keys to nudge it (hold Shift for bigger steps).
+      Only what is really inside a box is read: draw it around the number alone
+      and the unit beside it (&deg;C, K, kW) is left out.
     </div>
     <div id="fieldList"></div>
     <div class="hint" id="fieldEmptyHint">No fields yet.</div>
@@ -335,11 +337,6 @@ const OCR_PAGE_SCALE = 5;
    which suits these two-column spec sheets. */
 const OCR_PAGE_SEG_MODE = '3';
 
-/* OCR returns chunky word rectangles, so a word must be at least this much
-   inside your box before it counts. Lower it if boxes drawn tightly around a
-   value keep coming back empty. */
-const OCR_MIN_WORD_OVERLAP = 0.3;
-
 /* OCR is given up on after these many milliseconds. This matters: when the
    engine's files cannot be loaded it stalls silently rather than failing, and
    without a time limit Run would appear to hang for ever. */
@@ -354,15 +351,34 @@ const OCR_CACHE_LANGUAGE = false;
 
 /* --- extraction tuning --------------------------------------------------- */
 
-/* A text item counts as "inside" a box if their rectangles overlap. This grows
-   every box slightly first, as a fraction of the page size, so a word sitting a
-   hair outside the line you drew is still caught. 0.004 = 0.4% of the page. */
-const BOX_TOLERANCE = 0.004;
+/* HOW TEXT IS MATCHED TO A BOX. This decides exactly what ends up in a cell.
 
-/* How much of a text item must fall inside the box before it is accepted.
-   0 = any overlap at all counts (the default, and the most forgiving).
-   Raise towards 0.5 if boxes keep catching text from the neighbouring column. */
-const MIN_ITEM_OVERLAP = 0;
+   'centre'  (the default) - a piece of text belongs to the box when its middle
+             point is inside it. This reads only what you drew a box around: a
+             value one row below stays out, even though its rectangle may graze
+             the bottom edge of your box.
+   'overlap' - the older, more forgiving rule: any text whose rectangle overlaps
+             the box by MIN_ITEM_OVERLAP counts. Useful if you would rather draw
+             rough boxes and put up with the odd extra word.                  */
+const MATCH_RULE = 'centre';
+
+/* Grows every box slightly before matching, as a fraction of the page size.
+   Left at 0 so a box means exactly what you drew. Raising it to, say, 0.002
+   (0.2% of the page) makes matching more forgiving - but on a dense sheet the
+   rows are only about 1.6% of the page apart, so a large value here will start
+   pulling in the row above and below. */
+const BOX_TOLERANCE = 0;
+
+/* Only used when MATCH_RULE is 'overlap': how much of a piece of text must be
+   inside the box before it counts. */
+const MIN_ITEM_OVERLAP = 0.3;
+
+/* On scanned sheets, OCR often glues a value to its unit and reports "4.0K" or
+   "5.0°C" as ONE word. When such a word only half sits in your box, this uses
+   the individual letter positions OCR also provides to keep just the letters
+   that are actually inside it - so a box drawn around the number alone yields
+   "4.0", not "4.0K". Turn it off to always take such words whole. */
+const OCR_TRIM_PART_WORDS = true;
 
 /* Two text items are treated as being on the SAME LINE when their vertical
    positions are within this fraction of the page height of each other. */
@@ -1103,6 +1119,70 @@ function overlapFraction(a, b){
   return (w * h) / areaA;
 }
 
+/** Is the middle of this rectangle inside the box? */
+function centreIsInside(rect, box){
+  const midX = (rect.left + rect.right) / 2;
+  const midY = (rect.top + rect.bottom) / 2;
+  return midX >= box.left && midX <= box.right &&
+         midY >= box.top  && midY <= box.bottom;
+}
+
+/** The single test that decides whether one piece of text belongs to a box. */
+function isInsideBox(rect, box){
+  return MATCH_RULE === 'overlap'
+    ? overlapFraction(rect, box) > MIN_ITEM_OVERLAP
+    : centreIsInside(rect, box);
+}
+
+/**
+ * Decide what this piece of text contributes to a box.
+ *
+ * Returns null when it does not belong to the box at all. Normally it returns
+ * the piece unchanged. The interesting case is a piece that straddles the edge
+ * of the box: when OCR has given us the position of each individual letter we
+ * keep only the letters that are really inside, so a box drawn around the
+ * number in "4.0K" gives back "4.0" rather than "4.0K" or nothing.
+ */
+function clipItemToBox(item, box){
+  const letters = item.letters;
+
+  if (!OCR_TRIM_PART_WORDS || !letters || !letters.length){
+    return isInsideBox(item, box) ? item : null;
+  }
+
+  const kept = letters.filter(letter => isInsideBox(letter, box));
+  if (!kept.length) return null;
+
+  /* Wholly inside: hand back the original, with the text exactly as read. */
+  if (kept.length === letters.length) return item;
+
+  /* Partly inside: rebuild the piece from the letters that are inside. */
+  return {
+    text  : kept.map(l => l.text).join(''),
+    left  : Math.min.apply(null, kept.map(l => l.left)),
+    right : Math.max.apply(null, kept.map(l => l.right)),
+    top   : Math.min.apply(null, kept.map(l => l.top)),
+    bottom: Math.max.apply(null, kept.map(l => l.bottom)),
+    height: item.height
+  };
+}
+
+/** Everything inside one box, trimmed to the box, in the order it was found. */
+function itemsInsideBox(items, field){
+  const box = {
+    left  : field.x - BOX_TOLERANCE,
+    top   : field.y - BOX_TOLERANCE,
+    right : field.x + field.w + BOX_TOLERANCE,
+    bottom: field.y + field.h + BOX_TOLERANCE
+  };
+  const inside = [];
+  for (const item of items){
+    const clipped = clipItemToBox(item, box);
+    if (clipped && clipped.text.length) inside.push(clipped);
+  }
+  return inside;
+}
+
 /**
  * Take the text scraps that fall inside one box, put them into reading order
  * (top to bottom, then left to right) and join them into one tidy string.
@@ -1273,16 +1353,31 @@ async function ocrPageToItems(page){
           })));
     }
 
+    /* Keep each word AND the position of every letter in it. The letters are
+       what lets a box drawn around "4.0" leave the "K" of "4.0K" behind. */
+    const asFractions = (bbox) => ({
+      left  : bbox.x0 / canvas.width,
+      right : bbox.x1 / canvas.width,
+      top   : bbox.y0 / canvas.height,
+      bottom: bbox.y1 / canvas.height
+    });
+
     return words
       .filter(w => w && w.text && w.text.trim().length && w.bbox)
-      .map(w => ({
-        text  : w.text,
-        left  : w.bbox.x0 / canvas.width,
-        right : w.bbox.x1 / canvas.width,
-        top   : w.bbox.y0 / canvas.height,
-        bottom: w.bbox.y1 / canvas.height,
-        height: (w.bbox.y1 - w.bbox.y0) / canvas.height
-      }));
+      .map(w => {
+        const rect = asFractions(w.bbox);
+        return {
+          text   : w.text,
+          left   : rect.left,
+          right  : rect.right,
+          top    : rect.top,
+          bottom : rect.bottom,
+          height : rect.bottom - rect.top,
+          letters: (w.symbols || [])
+            .filter(sym => sym && sym.text && sym.text.length && sym.bbox)
+            .map(sym => Object.assign({ text: sym.text }, asFractions(sym.bbox)))
+        };
+      });
   } finally {
     /* Hand the memory back straight away - these canvases are large. */
     canvas.width = 0;
@@ -1357,18 +1452,8 @@ async function extractRowFromDoc(doc, fileIndex, fileName, onProgress){
       continue;
     }
 
-    /* OCR hands back chunky word rectangles, so it needs a firmer overlap
-       rule than the text layer, where each item is a tight little box. */
-    const minOverlap = usedOcr ? OCR_MIN_WORD_OVERLAP : MIN_ITEM_OVERLAP;
-
     for (const field of fields){
-      const target = {
-        left  : field.x - BOX_TOLERANCE,
-        top   : field.y - BOX_TOLERANCE,
-        right : field.x + field.w + BOX_TOLERANCE,
-        bottom: field.y + field.h + BOX_TOLERANCE
-      };
-      const hits = items.filter(it => overlapFraction(it, target) > minOverlap);
+      const hits = itemsInsideBox(items, field);
       const text = joinItemsInReadingOrder(hits);
       row.cells[field.name] = {
         text  : text,

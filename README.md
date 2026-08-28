@@ -24,19 +24,24 @@ It handles both kinds of spec sheet:
 3. **Repeat for every value** you want as a column. If a value lives on page 2,
    press *Next* to go to page 2 first, then draw — the field remembers the page
    it was drawn on. You can also change the page number in the field list.
-4. **Adjust boxes** any time: drag them, drag the red corner handles to resize,
+4. **Draw tight.** Only text whose middle is inside the box is taken, and on
+   scanned sheets that test is applied letter by letter. So a box around just
+   the number gives `4.0`, not `4.0 K`, and a box that stops above the next row
+   will not pick that row up. Draw around the number alone to get a clean
+   column; include the unit in the box if you want the unit.
+5. **Adjust boxes** any time: drag them, drag the red corner handles to resize,
    select one and nudge it with the arrow keys (hold Shift for bigger steps),
    rename it, type exact percentages, or delete it with the `×` button.
-5. **Press Run.** Every PDF is read in turn, with a progress bar. You get one row
+6. **Press Run.** Every PDF is read in turn, with a progress bar. You get one row
    per PDF and one column per field.
-6. **Check the results.** Click any cell and the page it came from is redrawn
+7. **Check the results.** Click any cell and the page it came from is redrawn
    with that box on it, and the text it pulled out is printed underneath.
    * A **yellow** cell means the box found nothing.
    * A **red** cell means that page could not be read — the PDF is a scan with
      no text in it, the PDF has fewer pages than the template expects, or the
      file would not open at all. Those rows are flagged for you to do by hand.
-7. **Export CSV** for the schedule, and **Export Template** for the boxes.
-8. **Next time**: open the page, *Import Template*, drop the new folder, press
+8. **Export CSV** for the schedule, and **Export Template** for the boxes.
+9. **Next time**: open the page, *Import Template*, drop the new folder, press
    Run. No redrawing.
 
 The template JSON file is the only thing that is saved. The page deliberately
@@ -50,10 +55,11 @@ uses no browser storage, so keep that file somewhere you can find it.
 | Status line: *OCR engine could not start* | Your network blocked the OCR CDN. See the second set of instructions at the top of the HTML file — and read the warning there: Chrome will not load local OCR files from a double-clicked page, so that route needs a shortcut with `--allow-file-access-from-files`. |
 | A whole row is red | The PDF has fewer pages than the template expects, would not open, or is a scan that OCR could not read. The cell text says which. |
 | Everything is slow on scanned sheets | That is OCR: roughly 5 seconds per scanned page, and the first one also downloads about 15 MB of language data. Text PDFs stay instant. Lower `OCR_PAGE_SCALE` from 5 to 4 to trade a little accuracy for speed. |
-| An OCR value is slightly wrong | Click the cell to see the box on the page. Superscript footnote markers (the `(1)(2)` after a value on Güntner sheets) and `m³/h` are what OCR fumbles most; numbers and model codes come through reliably. Draw the box to exclude the footnote if it bothers you. |
+| An OCR value is slightly wrong | Click the cell to see the box on the page. Superscript footnote markers (the `(1)(2)` after a value on Güntner sheets) and `m³/h` are what OCR fumbles most; numbers and model codes come through reliably. Keeping the box to the number alone avoids most of it. |
 | One cell is yellow | The box missed. Click the cell to see the page, nudge or enlarge the box, and press Run again. |
-| A cell grabbed the neighbouring column too | Make the box tighter, or raise `MIN_ITEM_OVERLAP` (near the top of the file) from `0` towards `0.5` so a text item must sit mostly inside the box to count. On scanned sheets the equivalent setting is `OCR_MIN_WORD_OVERLAP`. |
-| An OCR cell is empty although the value is plainly there | OCR returns chunky word rectangles. Enlarge the box a little, or lower `OCR_MIN_WORD_OVERLAP` from `0.3`. |
+| A cell grabbed the neighbouring row or column | Make the box tighter. Matching is already strict — only text whose middle is inside counts — so this normally means the box genuinely overlaps the other row. |
+| A cell is empty although the value is plainly there | The box is a shade too small, so the middle of the text falls outside it. Enlarge it slightly. If you would rather draw rough boxes everywhere, set `MATCH_RULE` (top of the file) to `'overlap'`, or raise `BOX_TOLERANCE` from `0` to about `0.002`. |
+| A unit is still stuck to the number | Set `OCR_TRIM_PART_WORDS` to `true` (it is on by default) and redraw the box so it stops before the unit. |
 | Wrapped lines run together oddly | Adjust `LINE_MERGE_TOLERANCE` (how far apart two bits of text can be and still count as one line) or `WORD_GAP_RATIO` (how wide a gap counts as a space). |
 | Boxes are slightly off on one supplier's sheets | Coordinates are stored as fractions of the page, so different paper sizes and rotated pages are handled. If a supplier has genuinely moved things, save a second template for them. |
 | Excel mangles accented characters | The CSV already carries the marker Excel needs; if your Excel is old, import it with *Data → From Text* and pick UTF-8. |
