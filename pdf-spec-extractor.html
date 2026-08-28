@@ -170,7 +170,12 @@ input[type=text], input[type=number]{
   position:absolute; top:-17px; left:-2px; font-size:10px; line-height:14px;
   padding:0 4px; background:var(--box); color:#fff; white-space:nowrap;
   border-radius:2px; font-family:"Segoe UI",Arial,sans-serif;
+  display:none;                      /* out of the way while you read the page */
 }
+.fieldBox:hover .tag,
+.fieldBox.selected .tag,
+body.show-all-names .fieldBox .tag{display:block}
+.fieldBox:hover .tag{z-index:6}
 .fieldBox.selected .tag{background:var(--box-selected)}
 .fieldBox .handle{
   position:absolute; width:9px; height:9px; background:#fff;
@@ -224,11 +229,16 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 <div id="banner"></div>
 
 <!-- Top: drop zone + the four buttons ------------------------------------- -->
+<!-- The hidden file inputs deliberately live OUTSIDE the drop zone. Inside it,
+     the click that opens one of them would bubble up to the drop zone, whose own
+     click handler would then open a second file dialog on top of the first. -->
+<input type="file" id="filePicker" accept="application/pdf,.pdf" multiple webkitdirectory style="display:none">
+<input type="file" id="filePicker2" accept="application/pdf,.pdf" multiple style="display:none">
+<input type="file" id="templatePicker" style="display:none">
+
 <div id="dropZone">
-  <b>Drop a folder of PDFs here</b> (or a multi-file selection) &mdash; or click to choose files
-  <input type="file" id="filePicker" accept="application/pdf,.pdf" multiple webkitdirectory style="display:none">
-  <input type="file" id="filePicker2" accept="application/pdf,.pdf" multiple style="display:none">
-  <input type="file" id="templatePicker" accept="application/json,.json" style="display:none">
+  <b>Drop a folder of PDFs here</b> (or a multi-file selection) &mdash; or click to choose files.
+  A template <b>.json</b> file can be dropped here too.
   <div style="margin-top:6px">
     <button type="button" id="btnPickFolder">Choose folder&hellip;</button>
     <button type="button" id="btnPickFiles">Choose files&hellip;</button>
@@ -237,6 +247,9 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 
 <div class="toolbar">
   <button type="button" id="btnImportTemplate">Import Template</button>
+  <label title="The name this template is saved under, and the name of the file">
+    <input type="text" id="templateName" placeholder="Template name" size="18">
+  </label>
   <button type="button" id="btnExportTemplate" disabled>Export Template</button>
   <button type="button" id="btnRun" class="primary" disabled>Run</button>
   <label title="What to do with scanned sheets that contain no real text">
@@ -272,6 +285,10 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
       <button type="button" id="btnZoomOut">&minus;</button>
       <button type="button" id="btnZoomIn">+</button>
       <span id="zoomLabel">100%</span>
+      <span style="width:12px"></span>
+      <label title="Names always cover part of the page. Leave this off and a name only appears when you point at its box or select it.">
+        <input type="checkbox" id="showNames"> Show all box names
+      </label>
     </div>
     <div id="canvasWrap">
       <canvas id="pageCanvas" width="10" height="10"></canvas>
@@ -627,7 +644,11 @@ dropZone.addEventListener('drop', async (e) => {
   }
   if (!files.length && e.dataTransfer.files) files = Array.from(e.dataTransfer.files);
 
-  addFiles(files);
+  /* A dropped template is loaded rather than treated as a PDF. */
+  const templates = files.filter(f => /\.json$/i.test(f.name));
+  for (const t of templates) await loadTemplateFile(t);
+
+  addFiles(files.filter(f => !/\.json$/i.test(f.name)));
 });
 
 /** Walk a dropped folder tree and collect every .pdf inside it. */
@@ -651,7 +672,11 @@ async function collectPdfsFromEntry(entry, out){
 /* The two picker buttons and the click-anywhere-on-the-dropzone shortcut. */
 $('btnPickFolder').addEventListener('click', e => { e.stopPropagation(); $('filePicker').click(); });
 $('btnPickFiles').addEventListener('click',  e => { e.stopPropagation(); $('filePicker2').click(); });
-dropZone.addEventListener('click', () => $('filePicker2').click());
+dropZone.addEventListener('click', (e) => {
+  /* Clicking one of the buttons inside must not also open the PDF chooser. */
+  if (e.target.closest('button, input')) return;
+  $('filePicker2').click();
+});
 $('filePicker').addEventListener('change',  e => addFiles(Array.from(e.target.files)));
 $('filePicker2').addEventListener('change', e => addFiles(Array.from(e.target.files)));
 
@@ -673,6 +698,7 @@ function addFiles(fileList){
   /* Keep the list in file-name order so the output is predictable. */
   state.files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
+  if (!fileList.length) return;    /* nothing was dropped that we handle here */
   updateStatus(pdfs.length === 0 ? 'No PDF files found in what you dropped.' : '');
   refreshButtons();
 
@@ -1867,11 +1893,20 @@ $('btnExportCsv').addEventListener('click', () => {
   downloadTextFile('schedule-' + todayStamp() + '.csv', text, 'text/csv;charset=utf-8');
 });
 
+/** Turn whatever was typed into something safe to use as a file name. */
+function asFileName(text, fallback){
+  const cleaned = normaliseWhitespace(text).replace(/[\\/:*?"<>|]/g, '-');
+  return cleaned || fallback;
+}
+
 $('btnExportTemplate').addEventListener('click', () => {
   if (!state.fields.length) return;
+
+  const name = normaliseWhitespace($('templateName').value);
   const template = {
     format : TEMPLATE_FORMAT,
     version: TEMPLATE_VERSION,
+    name   : name || 'Untitled template',
     created: new Date().toISOString(),
     note   : 'Coordinates are fractions of the page (0..1), measured on the page as displayed.',
     fields : state.fields.map(f => ({
@@ -1881,8 +1916,10 @@ $('btnExportTemplate').addEventListener('click', () => {
       w: +f.w.toFixed(6), h: +f.h.toFixed(6)
     }))
   };
-  downloadTextFile('spec-template-' + todayStamp() + '.json',
-                   JSON.stringify(template, null, 2), 'application/json');
+
+  const fileName = asFileName(name, 'spec-template-' + todayStamp()) + '.json';
+  downloadTextFile(fileName, JSON.stringify(template, null, 2), 'application/json');
+  updateStatus('Template saved as ' + fileName + '.');
 });
 
 $('btnImportTemplate').addEventListener('click', () => $('templatePicker').click());
@@ -1891,7 +1928,14 @@ $('templatePicker').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';               /* allow picking the same file twice */
   if (!file) return;
+  await loadTemplateFile(file);
+});
 
+/**
+ * Read a template out of a .json file, whether it was chosen with the button
+ * or dropped onto the page. Says plainly what happened either way.
+ */
+async function loadTemplateFile(file){
   try {
     const parsed = JSON.parse(await file.text());
     const incoming = Array.isArray(parsed) ? parsed : parsed.fields;
@@ -1917,15 +1961,26 @@ $('templatePicker').addEventListener('change', async (e) => {
     }
     state.rows = [];
     state.selectedIds = [];
+
+    /* Bring the template's own name back, so re-exporting keeps it. */
+    const savedName = normaliseWhitespace(parsed.name || '');
+    $('templateName').value = savedName ||
+      file.name.replace(/\.json$/i, '');
+
     renderFieldList();
     renderResultsTable();
     drawAllBoxes();
     refreshButtons();
-    updateStatus('Template loaded: ' + state.fields.length + ' field(s) from ' + file.name + '.');
+    $('banner').style.display = 'none';
+    updateStatus('Loaded template "' + $('templateName').value + '" - ' +
+                 state.fields.length + ' field(s)' +
+                 (state.files.length ? '. Press Run.' : '. Now drop your PDFs in.'));
   } catch (err){
-    showBanner('That template file could not be read: ' + err.message);
+    showBanner('That template file could not be read: ' + err.message +
+               '\n\nIt should be a .json file saved by this page - the one with ' +
+               '"fields" inside it, not the CSV.');
   }
-});
+}
 
 
 /* ===========================================================================
@@ -2002,6 +2057,12 @@ window.addEventListener('resize', () => {
    the exported template JSON file is the only place anything is kept. */
 
 $('ocrDoubleCheck').checked = OCR_DOUBLE_CHECK;
+
+/* Box names are normally out of the way; point at a box (or select it) to see
+   its name, or tick the box in the toolbar to show them all at once. */
+$('showNames').addEventListener('change', () => {
+  document.body.classList.toggle('show-all-names', $('showNames').checked);
+});
 
 setUpPdfJs().then(() => {
   renderFieldList();

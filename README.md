@@ -41,7 +41,9 @@ It handles both kinds of spec sheet:
    select one and nudge it with the arrow keys (hold Shift for bigger steps),
    rename it, or delete it with the `×` button. A box is only drawn on the page
    it belongs to, so page 2 is not cluttered with page 1's boxes — use **View**
-   in the field list to jump to a field's page.
+   in the field list to jump to a field's page. Box names stay out of your way:
+   point at a box (or select it) to see its name, or tick **Show all box names**
+   above the page if you want them all at once.
 6. **Order the columns.** The field list is the column order: top of the list
    is the left-most column, and the file name is always last. Click a field
    (Ctrl+click or Shift+click for several), then press ↑/↓ or use the
@@ -61,9 +63,13 @@ It handles both kinds of spec sheet:
    * A **red** cell means that page could not be read — the PDF is a scan with
      no text in it, the PDF has fewer pages than the template expects, or the
      file would not open at all. Those rows are flagged for you to do by hand.
-9. **Export CSV** for the schedule, and **Export Template** for the boxes.
-10. **Next time**: open the page, *Import Template*, drop the new folder, press
-   Run. No redrawing.
+9. **Export CSV** for the schedule. For the boxes, type a name in the
+   **Template name** box and press **Export Template** — the name becomes the
+   file name and is remembered inside the file, so it comes back when you load
+   it again.
+10. **Next time**: open the page, *Import Template* (or just drop the template
+   `.json` onto the drop zone), drop the new folder, press Run. No redrawing.
+   The template can be loaded before or after the PDFs — either order works.
 
 The template JSON file is the only thing that is saved. The page deliberately
 uses no browser storage, so keep that file somewhere you can find it.
@@ -84,6 +90,7 @@ uses no browser storage, so keep that file somewhere you can find it.
 | A unit is still stuck to the number | Set `OCR_TRIM_PART_WORDS` to `true` (it is on by default) and redraw the box so it stops before the unit. |
 | Wrapped lines run together oddly | Adjust `LINE_MERGE_TOLERANCE` (how far apart two bits of text can be and still count as one line) or `WORD_GAP_RATIO` (how wide a gap counts as a space). |
 | Boxes are slightly off on one supplier's sheets | Coordinates are stored as fractions of the page, so different paper sizes and rotated pages are handled. If a supplier has genuinely moved things, save a second template for them. |
+| *Import Template* seems to do nothing | Fixed. The hidden file inputs used to sit inside the drop zone, so opening the template chooser also opened the PDF chooser on top of it, and the `.json` was never picked. If you are on an older copy, replace it with this one. |
 | Excel mangles accented characters | The CSV already carries the marker Excel needs; if your Excel is old, import it with *Data → From Text* and pick UTF-8. |
 
 All the tunable settings — CDN address, colours, tolerances, CSV options — are
