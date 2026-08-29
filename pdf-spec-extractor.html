@@ -194,12 +194,8 @@ input[type=text], input[type=number]{
    edits one PDF thinking they are editing them all. */
 body.scope-sheet .fieldBox{border-color:var(--override); background:rgba(191,110,0,.10)}
 body.scope-sheet .fieldBox .tag{background:var(--override)}
-body.scope-sheet .toolbar #editScope{outline:2px solid var(--override); outline-offset:2px}
 .fieldBox.overridden{border-style:dashed}
-.badge{
-  font-size:10px; padding:1px 5px; border-radius:8px; background:var(--override);
-  color:#fff; margin-left:4px; white-space:nowrap;
-}
+#btnScope.scopeOne{background:var(--override); border-color:var(--override); color:#fff}
 .fieldBox .tag{
   position:absolute; top:-17px; left:-2px; font-size:10px; line-height:14px;
   padding:0 4px; background:var(--box); color:#fff; white-space:nowrap;
@@ -224,7 +220,7 @@ body.show-all-names .fieldBox .tag{display:block}
   margin-bottom:4px; background:#fff; cursor:pointer;
 }
 .fieldRow.selected{border-color:var(--box-selected); background:#fff5f5}
-.fieldRow .top input[type=text]{font-weight:600}
+.fieldRow .top input[type=text]{font-weight:600; min-width:110px}
 #fieldsPanel.active{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
 #reorderBar{display:flex; gap:6px; align-items:center; margin-bottom:7px}
 #reorderBar .note{color:var(--muted); font-size:11px}
@@ -336,13 +332,8 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
   <label class="hint" style="display:none" id="sessionOptLabel">
     <input type="checkbox" id="sessionWithPdfs" checked> include the PDFs in the session file
   </label>
-  <label title="Moving a box normally moves it for every PDF in the batch. Switch this when one supplier's sheet is laid out slightly differently.">
-    Changes apply to:
-    <select id="editScope">
-      <option value="all" selected>Every PDF</option>
-      <option value="file">This PDF only</option>
-    </select>
-  </label>
+  <button type="button" id="btnScope" title="Moving a box normally moves it for every PDF in the batch. Press this when one supplier's sheet is laid out slightly differently, and the change stays on the PDF you are looking at.">Changing: every PDF</button>
+  <button type="button" id="btnResetBox" disabled title="Put the selected box back to the position shared by every PDF">Reset box</button>
   <span class="spacer"></span>
   <button type="button" id="btnClearAll">Clear everything</button>
 </div>
@@ -607,6 +598,10 @@ const state = {
      up and down). Set by whichever you last clicked in. */
   focusArea  : 'canvas',
 
+  /* 'all'  - moving a box moves it everywhere (the normal way of working)
+     'one'  - moving a box changes only the sheet/PDF on screen            */
+  editScope  : 'all',
+
   /* what the canvas is showing right now */
   view: {
     fileIndex : 0,
@@ -763,21 +758,26 @@ const dropZone = $('dropZone');
 );
 
 dropZone.addEventListener('drop', async (e) => {
+  /* EVERYTHING that is needed from the drop must be taken now, while the event
+     is still being handled. The moment this function waits for anything, the
+     browser empties the drop out from under it - which is why dropping a
+     handful of files used to do nothing while dropping a folder worked. */
   const items = e.dataTransfer && e.dataTransfer.items;
-  let files = [];
-
-  /* A dropped FOLDER only appears through the "entries" interface, so use it
-     when available and walk every sub-folder. Otherwise fall back to the
-     plain file list, which covers multi-file selections. */
-  if (items && items.length && items[0].webkitGetAsEntry){
-    const entries = [];
+  const plainList = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+  const entries = [];
+  if (items && items.length){
     for (let i = 0; i < items.length; i++){
-      const entry = items[i].webkitGetAsEntry();
+      const entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
       if (entry) entries.push(entry);
     }
-    for (const entry of entries) await collectPdfsFromEntry(entry, files);
   }
-  if (!files.length && e.dataTransfer.files) files = Array.from(e.dataTransfer.files);
+
+  /* A dropped FOLDER only appears through the "entries" interface, so walk
+     those when there are any. The plain list covers everything else, and is
+     also the fallback when a drag carries no entries at all. */
+  let files = [];
+  for (const entry of entries) await collectPdfsFromEntry(entry, files);
+  if (!files.length) files = plainList;
 
   /* A dropped .json is loaded rather than treated as a PDF - a whole session
      if that is what it turns out to be, otherwise just the boxes. */
@@ -1219,7 +1219,7 @@ function hasOverride(field, fileKey){
  * PDF" mode, or a copy kept for the PDF on screen in "this PDF only" mode.
  */
 function editableRect(field, fileKey){
-  if ($('editScope').value !== 'file' || !fileKey) return field;
+  if (state.editScope !== 'one' || !fileKey) return field;
   field.overrides = field.overrides || {};
   if (!field.overrides[fileKey]){
     const from = rectForField(field, fileKey);
@@ -1469,24 +1469,6 @@ function renderFieldList(){
     del.addEventListener('click', () => deleteField(field.id));
 
     top.append(name, pageLbl, page, goto, del);
-
-    /* When the PDF on screen has its own position for the box, say so and
-       offer to put it back to the shared one. */
-    const fileKey = currentFileKey();
-    if (hasOverride(field, fileKey)){
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.textContent = 'moved on this PDF';
-      const reset = document.createElement('button');
-      reset.type = 'button';
-      reset.textContent = 'Reset';
-      reset.title = 'Put this box back to the position used by every other PDF';
-      reset.addEventListener('click', () => {
-        clearOverride(field, fileKey);
-        drawAllBoxes(); renderFieldList(); refreshButtons();
-      });
-      top.append(badge, reset);
-    }
 
     /* The exact coordinates are not shown: the box on the page is the truth,
        and leaving them out keeps many more fields visible in this list. */
@@ -2620,7 +2602,9 @@ function refreshButtons(){
   $('btnSaveSession').disabled    = state.running || (!state.fields.length && !state.files.length);
   $('ocrMode').disabled           = state.running;
   $('ocrDoubleCheck').disabled    = state.running;
-  $('editScope').disabled         = state.running;
+  $('btnScope').disabled          = state.running;
+  $('btnResetBox').disabled       = state.running ||
+    !selectedFields().some(f => hasOverride(f, currentFileKey()));
   updateSelectionNote();
   $('btnPrevPage').disabled       = !state.view.doc || state.view.pageNum <= 1;
   $('btnNextPage').disabled       = !state.view.doc || state.view.pageNum >= state.view.pageCount;
@@ -2657,15 +2641,34 @@ window.addEventListener('resize', () => {
    the exported template JSON file is the only place anything is kept. */
 
 $('ocrDoubleCheck').checked = OCR_DOUBLE_CHECK;
+refreshScopeButton();
 
 /* Box names are normally out of the way; point at a box (or select it) to see
    its name, or tick the box in the toolbar to show them all at once. */
 /* All the explanatory notes are folded away until the Info button is on, so
    the screen carries only what is needed to do the job. */
-$('editScope').addEventListener('change', () => {
-  document.body.classList.toggle('scope-sheet', $('editScope').value === 'file');
+$('btnScope').addEventListener('click', () => {
+  state.editScope = state.editScope === 'one' ? 'all' : 'one';
+  refreshScopeButton();
   drawAllBoxes();
-  renderFieldList();
+});
+
+/** Keep the toggle's wording and colour matching what it will actually do. */
+function refreshScopeButton(){
+  const one = state.editScope === 'one';
+  $('btnScope').textContent = one ? 'Changing: THIS PDF only' : 'Changing: every PDF';
+  $('btnScope').classList.toggle('scopeOne', one);
+  document.body.classList.toggle('scope-sheet', one);
+}
+
+/* Put the selected boxes back to the shared position. Nothing is shown in the
+   field list about which boxes have been moved - the dashed edge on the page
+   is enough - so this is how a change is undone. */
+$('btnResetBox').addEventListener('click', () => {
+  const key = currentFileKey();
+  selectedFields().forEach(field => clearOverride(field, key));
+  drawAllBoxes();
+  refreshButtons();
 });
 
 $('ocrMode').addEventListener('change', () => showOcrStatus(state.pageKind));

@@ -62,8 +62,9 @@ and can go in the job folder with the drawings.
 
 ## How to use it
 
-1. **Drop your folder of PDFs** onto the grey box at the top (sub-folders are
-   searched too, and anything that isn't a `.pdf` is ignored). The first page of
+1. **Drop your PDFs** onto the grey box at the top — a whole folder, or any
+   number of loose files. Sub-folders are searched too, and anything that isn't
+   a `.pdf` is ignored. The first page of
    the first PDF appears so you have something to work on. **Files loaded** under
    the status line folds open to list them — click a name to show that PDF, and
    after a run anything needing a check is marked there in red.
@@ -80,10 +81,10 @@ and can go in the job folder with the drawings.
    want the unit. In a text PDF the letter positions are estimated (the exact
    font is not available to the page), so leave a little air between your box
    edge and the unit.
-5. **If one PDF is laid out differently**, switch the toolbar to *This PDF only*.
-   Everything turns amber as a warning, and moving a box then changes it for that
-   one file — the field list shows a "moved on this PDF" badge with a **Reset**
-   button, and the box is drawn with a dashed edge.
+5. **If one PDF is laid out differently**, press **Changing: every PDF** so it
+   reads *Changing: THIS PDF only*. It turns amber, as do the boxes, and moving a
+   box then changes it for that one file. A box that has been moved is drawn with
+   a dashed edge; select it and press **Reset box** to put it back.
 6. **Adjust boxes** any time: drag them, drag the red corner handles to resize,
    select one and nudge it with the arrow keys (hold Shift for bigger steps),
    rename it, or delete it with the `×` button. A box is only drawn on the page
@@ -167,11 +168,11 @@ a row comes out per data sheet instead of per file.
    other tool. Each field remembers which page *within* a data sheet it sits on
    (**sheet page** 1 is the page the sheet starts on, 2 is the next), so the
    same boxes are used at the same place on every sheet.
-4. **If one sheet is different**, switch the toolbar to **This data sheet only**.
-   Everything turns amber as a warning, and moving or resizing a box then
-   changes it *for that sheet alone* — the field list shows a "moved on sheet N"
-   badge with a **Reset** button, and the box is drawn with a dashed edge.
-   Switch back to **Every data sheet** for normal editing.
+4. **If one sheet is different**, press **Changing: every data sheet** so it
+   reads *Changing: THIS data sheet only*. It turns amber, as do the boxes, and
+   moving or resizing a box then changes it *for that sheet alone*. A box that
+   has been moved is drawn with a dashed edge; select it and press **Reset box**
+   to put it back. Press the toggle again for normal editing.
 5. **Press Run.** One row per data sheet, with the sheet number and its page
    range as the last two columns.
 6. Everything else behaves as in the other tool: click a cell to see the page it
