@@ -256,10 +256,17 @@ body.scope-sheet #sheetBar{outline:2px solid var(--override); outline-offset:3px
 #fieldsPanel.active{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
 #reorderBar{display:flex; gap:6px; align-items:center; margin-bottom:7px}
 #reorderBar .note{color:var(--muted); font-size:11px}
+.chip{
+  font-size:11px; padding:2px 8px; border-radius:10px;
+  background:#e8eaed; color:var(--muted); white-space:nowrap;
+}
+.chip.text-pdf{background:#e4f4e6; color:#1d6b2b}
+.chip.scan-pdf{background:var(--ocr-bg); color:#0a4b96}
 .fieldRow .top{display:flex; gap:6px; align-items:center}
 .fieldRow .top input[type=text]{flex:1; min-width:0}
 .hint{color:var(--muted); font-size:12px; margin:4px 0 10px; display:none}
 body.show-help .hint{display:block}
+body.show-help #sessionOptLabel{display:inline-block !important}
 #headerRow{display:flex; align-items:baseline; gap:10px}
 #headerRow h1{flex:1}
 #btnInfo{font-size:12px; padding:3px 10px}
@@ -318,6 +325,7 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
      click handler would then open a second file dialog on top of the first. -->
 <input type="file" id="filePicker" accept="application/pdf,.pdf" style="display:none">
 <input type="file" id="templatePicker" style="display:none">
+<input type="file" id="sessionPicker" style="display:none">
 
 <div id="dropZone">
   <b>Drop the merged PDF here</b>, or
@@ -334,20 +342,53 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
   </label>
   <button type="button" id="btnExportTemplate" disabled>Export Template</button>
   <button type="button" id="btnRun" class="primary" disabled>Run</button>
-  <label title="What to do with scanned sheets that contain no real text">
-    Scanned sheets:
+  <label title="Sheets made by a computer contain real text and are read exactly. Sheets that were scanned or photographed are just a picture, and have to be read by OCR - handwriting-recognition for print. Leave this on Automatic and the right thing happens by itself.">
+    Reading:
     <select id="ocrMode">
-      <option value="auto" selected>OCR only when needed</option>
-      <option value="always">Always use OCR</option>
+      <option value="auto" selected>Automatic (recommended)</option>
+      <option value="always">Force OCR on every page</option>
       <option value="never">Never use OCR</option>
     </select>
   </label>
-  <label title="Read every scanned page twice and flag anything the two readings disagree about. Twice as slow, and the only reliable way to catch a decimal point that OCR could not see.">
-    <input type="checkbox" id="ocrDoubleCheck" checked> Double-check scans
+  <span id="ocrStatus" class="chip">no PDF open yet</span>
+  <label id="doubleCheckLabel" title="OCR is read twice at two different sizes and anything the two readings disagree about is flagged in orange. It doubles the time on scanned sheets and is the only reliable way to catch a decimal point OCR could not see.">
+    <input type="checkbox" id="ocrDoubleCheck" checked> Double-check
   </label>
   <button type="button" id="btnExportCsv" disabled>Export CSV</button>
+  <span style="width:8px"></span>
+  <button type="button" id="btnSaveSession" disabled title="Save the boxes, the results table and the PDFs into one file you can open again later">Save Session</button>
+  <button type="button" id="btnOpenSession">Open Session</button>
+  <label class="hint" style="display:none" id="sessionOptLabel">
+    <input type="checkbox" id="sessionWithPdfs" checked> include the PDFs in the session file
+  </label>
   <span class="spacer"></span>
   <button type="button" id="btnClearAll">Clear everything</button>
+</div>
+
+
+<div class="hint" id="ocrHelp" style="margin:-4px 0 10px">
+  <b>About "Reading":</b> a spec sheet is one of two things.
+  A sheet made by a computer holds <b>real text</b> — you could select and copy it
+  in a PDF reader — and this tool reads it exactly and instantly.
+  A sheet that was scanned or photographed is just a <b>picture of a page</b>;
+  nothing can be selected, so the text has to be recognised from the image
+  (<b>OCR</b>). OCR is slower (about 5 seconds a page, and the first page of a
+  session downloads roughly 15&nbsp;MB of language data) and it is very good but
+  never perfect — most mistakes are a lost decimal point or a mangled
+  superscript.
+  <br><br>
+  <b>You do not need to choose.</b> On <b>Automatic</b> each page is read from its
+  real text when it has any, and only pages without any are given to OCR — so a
+  folder holding both kinds is handled correctly without you doing anything. The
+  chip beside the box tells you which kind the open PDF is.
+  Use <b>Force OCR</b> only to test what OCR makes of a page that does have text;
+  use <b>Never</b> to make sure nothing is guessed, at the cost of scanned sheets
+  coming back blank and flagged.
+  <br><br>
+  <b>Double-check</b> reads each scanned page a second time at a different size
+  and flags any value the two readings disagree about in orange. It doubles the
+  time on scans, and it is the only dependable way to catch a decimal point that
+  one reading could not see. It does nothing on real-text sheets.
 </div>
 
 <div id="statusLine">
@@ -483,6 +524,12 @@ const OCR_LANGUAGE         = 'eng';
    Drop to 4 if a very large batch makes the browser run short of memory. */
 const OCR_PAGE_SCALE = 5;
 
+/* How many characters of real text a page must carry before it is called a
+   proper text PDF. A scan holds none at all. A handful usually means a scan
+   with an invisible stamp on it ("Scanned by ..."), which is worth warning
+   about because the text layer will be useless even though it exists. */
+const TEXT_LAYER_CHARS_EXPECTED = 12;
+
 /* Tesseract's page layout mode. 3 = "work the layout out for yourself",
    which suits these two-column spec sheets. */
 const OCR_PAGE_SEG_MODE = '3';
@@ -571,6 +618,14 @@ const MAX_RENDER_SCALE  = 4;     /* safety cap so huge zoom cannot hang       */
 const CSV_ADD_BOM         = true;  /* helps Excel open UTF-8 correctly        */
 const TEMPLATE_FORMAT     = 'pdf-spec-extractor-template';
 const TEMPLATE_VERSION    = 1;
+const SESSION_FORMAT      = 'pdf-spec-extractor-session';
+
+/* A session file normally carries the PDFs inside it so that opening it brings
+   everything back. Text is about a third bigger than the raw file, so this cap
+   stops a very large batch producing a session file the browser cannot write.
+   Past it, the session is saved without the PDFs - the boxes and the table
+   still come back, and you re-drop the folder to look at the pages again. */
+const SESSION_MAX_MB = 400;
 
 /* Text written into a cell that could not be read at all. Empty matches stay
    genuinely empty - they are highlighted instead of being filled with words. */
@@ -623,7 +678,8 @@ const state = {
   },
 
   running: false,
-  message: '',   /* the one-off note shown at the end of the status line */
+  message: '',
+  pageKind: 'unknown',   /* 'text' or 'scan', for the note beside Reading */   /* the one-off note shown at the end of the status line */
 
   /* The OCR engine is started once and then re-used for the whole batch. */
   ocr: {
@@ -853,8 +909,9 @@ const dropZone = $('dropZone');
 dropZone.addEventListener('drop', async (e) => {
   const dropped = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
 
-  /* A dropped template is loaded rather than treated as a PDF. */
-  for (const t of dropped.filter(f => /\.json$/i.test(f.name))) await loadTemplateFile(t);
+  /* A dropped .json is loaded rather than treated as a PDF - a whole session
+     if that is what it turns out to be, otherwise just the boxes. */
+  for (const t of dropped.filter(f => /\.json$/i.test(f.name))) await loadSessionFile(t);
 
   const pdf = dropped.find(f => /\.pdf$/i.test(f.name));
   if (pdf) await openMergedPdf(pdf);
@@ -896,6 +953,7 @@ async function openMergedPdf(file){
     if (!state.breaks.length) state.breaks = [1];
 
     $('banner').style.display = 'none';
+    showOcrStatus(await sniffPageKind(state.doc, 1));
     await showPage(1);
     renderResultsTable();
     updateStatus('Opened ' + file.name + ' - ' + state.pageCount + ' page' +
@@ -1060,8 +1118,8 @@ $('btnClearBreaks').addEventListener('click', () => {
 });
 
 /** Everything that has to catch up when the breaks change. */
-function afterBreaksChanged(){
-  state.rows = [];
+function afterBreaksChanged(keepRows){
+  if (!keepRows) state.rows = [];
   drawAllBoxes();
   updateSheetLabel();
   renderSheetList();
@@ -1822,6 +1880,63 @@ function joinItemsInReadingOrder(items){
   return normaliseWhitespace(lineStrings.join(' '));
 }
 
+
+/* ===========================================================================
+   TELLING YOU WHETHER OCR IS NEEDED
+
+   People should not have to guess. When a PDF is opened its first page is
+   checked for real text, and the chip beside the Reading box says plainly
+   which kind of sheet this is.
+   =========================================================================== */
+
+/**
+ * Look at one page and report what kind of sheet this is.
+ * Returns 'text' (a computer-made PDF, read exactly), 'scan' (a picture of a
+ * page, which needs OCR) or 'unknown'.
+ */
+async function sniffPageKind(doc, pageNum){
+  try {
+    const page    = await doc.getPage(pageNum || 1);
+    const content = await page.getTextContent();
+    let characters = 0;
+    for (const item of content.items){
+      if (item.str) characters += item.str.replace(/\s/g, '').length;
+    }
+    if (characters === 0) return 'scan';
+    return characters >= TEXT_LAYER_CHARS_EXPECTED ? 'text' : 'barely';
+  } catch (err){
+    return 'unknown';
+  }
+}
+
+/** Put the answer on screen, in words rather than jargon. */
+function showOcrStatus(kind){
+  const chip = $('ocrStatus');
+  const mode = $('ocrMode').value;
+  chip.className = 'chip';
+
+  if (kind === 'text'){
+    chip.classList.add('text-pdf');
+    chip.textContent = mode === 'always'
+      ? 'real text, but you have forced OCR on'
+      : 'real text - no OCR needed, this will be quick';
+  } else if (kind === 'scan'){
+    chip.classList.add('scan-pdf');
+    chip.textContent = mode === 'never'
+      ? 'a scan - but OCR is switched off, so nothing will be read'
+      : 'a scan - OCR will read it (about 5 seconds a page)';
+  } else if (kind === 'barely'){
+    /* Almost no text: usually a scan carrying an invisible stamp. Automatic
+       will trust the little text there is, which is why this says so. */
+    chip.classList.add('scan-pdf');
+    chip.textContent = 'hardly any text - if the cells come back empty, choose Force OCR';
+  } else {
+    chip.textContent = 'no PDF open yet';
+  }
+  state.pageKind = kind;
+}
+
+
 /* ===========================================================================
    9b. OCR  -  reading sheets that are pictures rather than text
 
@@ -2460,6 +2575,165 @@ async function loadTemplateFile(file){
 }
 
 
+
+/* ===========================================================================
+   12b. SESSIONS  -  putting a whole afternoon's work in one file.
+
+   A session file is the template PLUS the results table PLUS, if you want it,
+   the PDFs themselves. Open it tomorrow and everything is back: the boxes, the
+   table, and the documents behind them - no re-dropping, no re-running.
+
+   Why a file rather than the page just remembering by itself: a page opened by
+   double-clicking it has no reliable place to keep anything. Browsers give a
+   file:// page no database of its own, and nothing at all survives being copied
+   to another machine. A file you can see, back up, e-mail to a colleague and
+   put in the job folder is both simpler and more durable.
+   =========================================================================== */
+
+/** Turn raw bytes into text that can live inside a JSON file. */
+function bytesToBase64(bytes){
+  let binary = '';
+  const chunk = 0x8000;                 /* in pieces, or very large files blow
+                                           the argument limit of fromCharCode */
+  for (let i = 0; i < bytes.length; i += chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** And back again. */
+function base64ToBytes(text){
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Is this .json file a whole session, or just a template? */
+function looksLikeASession(parsed){
+  return !!(parsed && (parsed.rows || parsed.files || parsed.pdf ||
+                       parsed.format === SESSION_FORMAT));
+}
+
+
+/* --- saving a session (the merged version) -------------------------------- */
+
+$('btnSaveSession').addEventListener('click', async () => {
+  if (!state.doc && !state.fields.length) return;
+  const withPdf = $('sessionWithPdfs').checked;
+
+  try {
+    updateStatus('Saving the session…');
+    const session = {
+      format      : SESSION_FORMAT,
+      version     : TEMPLATE_VERSION,
+      app         : 'merged',
+      created     : new Date().toISOString(),
+      templateName: normaliseWhitespace($('templateName').value),
+      breaks      : state.breaks.slice().sort((a, b) => a - b),
+      fields      : state.fields.map(f => ({
+        name: f.name, pageInSheet: f.pageInSheet,
+        x: f.x, y: f.y, w: f.w, h: f.h,
+        overrides: f.overrides || {}
+      })),
+      rows        : state.rows,
+      pdf         : null
+    };
+
+    if (withPdf && state.fileBytes){
+      const bytes = new Uint8Array(state.fileBytes);
+      if ((bytes.length * 1.37) / 1048576 > SESSION_MAX_MB){
+        updateStatus('That PDF is too big to put in one file, so the session ' +
+                     'was saved without it. Re-open the PDF after opening the session.');
+      } else {
+        session.pdf = { name: state.fileName, size: bytes.length,
+                        data: bytesToBase64(bytes) };
+      }
+    }
+
+    const name = asFileName(session.templateName, 'session-' + todayStamp());
+    downloadTextFile(name + '.session.json', JSON.stringify(session), 'application/json');
+    updateStatus('Session saved as ' + name + '.session.json' +
+                 (session.pdf ? ' (with the PDF inside it).' : ' (boxes and table only).'));
+  } catch (err){
+    showBanner('The session could not be saved: ' + err.message);
+  }
+});
+
+/* --- opening a session ---------------------------------------------------- */
+
+$('btnOpenSession').addEventListener('click', () => $('sessionPicker').click());
+$('sessionPicker').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (file) await loadSessionFile(file);
+});
+
+/** Put a saved session back: the marks, the boxes, the table and the PDF. */
+async function loadSessionFile(file){
+  try {
+    updateStatus('Opening the session…');
+    const parsed = JSON.parse(await file.text());
+    if (!looksLikeASession(parsed)) return loadTemplateFile(file);
+
+    /* --- the boxes --- */
+    state.fields = [];
+    nextFieldId = 1;
+    for (const raw of (parsed.fields || [])){
+      const field = {
+        id  : nextFieldId++,
+        name: '',
+        pageInSheet: Math.max(1, parseInt(raw.pageInSheet || raw.page, 10) || 1),
+        x: clamp(Number(raw.x) || 0, 0, 1),
+        y: clamp(Number(raw.y) || 0, 0, 1),
+        w: clamp(Number(raw.w) || 0, 0.002, 1),
+        h: clamp(Number(raw.h) || 0, 0.002, 1),
+        overrides: {}
+      };
+      for (const key in (raw.overrides || {})){
+        const r = raw.overrides[key] || {};
+        field.overrides[key] = {
+          x: clamp(Number(r.x) || 0, 0, 1), y: clamp(Number(r.y) || 0, 0, 1),
+          w: clamp(Number(r.w) || 0, 0.002, 1), h: clamp(Number(r.h) || 0, 0.002, 1)
+        };
+      }
+      state.fields.push(field);
+      field.name = makeUniqueName(raw.name || 'Field', field.id);
+    }
+    $('templateName').value = parsed.templateName || file.name.replace(/\.session\.json$/i, '');
+
+    /* --- the PDF, rebuilt from the text it was stored as --- */
+    if (parsed.pdf && parsed.pdf.data){
+      const bytes = base64ToBytes(parsed.pdf.data);
+      const rebuilt = new File([bytes], parsed.pdf.name || 'merged.pdf',
+                               { type: 'application/pdf' });
+      await openMergedPdf(rebuilt);
+    }
+
+    /* --- where the data sheets start (after the PDF, so they can be checked) --- */
+    if (Array.isArray(parsed.breaks) && parsed.breaks.length){
+      state.breaks = parsed.breaks
+        .map(n => parseInt(n, 10))
+        .filter(n => n >= 1 && (!state.pageCount || n <= state.pageCount));
+      if (!state.breaks.length) state.breaks = [1];
+    }
+
+    /* --- the results table --- */
+    state.rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+    state.selectedIds = [];
+
+    afterBreaksChanged(true);
+    renderResultsTable();
+    $('banner').style.display = 'none';
+    updateStatus('Session restored: ' + state.fields.length + ' field(s), ' +
+      dataSheets().length + ' data sheet(s), ' + state.rows.length + ' row(s)' +
+      (parsed.pdf ? '.' : ' - open the PDF again to see the pages.'));
+  } catch (err){
+    showBanner('That session file could not be read: ' + err.message);
+  }
+}
+
+
 /* ===========================================================================
    13. STATUS LINE, BUTTON STATES, AND STARTUP
    =========================================================================== */
@@ -2506,6 +2780,7 @@ function refreshButtons(){
   $('btnRun').disabled            = state.running || !open || !state.fields.length || !sheets.length;
   $('btnExportCsv').disabled      = state.running || !state.rows.length;
   $('btnExportTemplate').disabled = state.running || !state.fields.length;
+  $('btnSaveSession').disabled    = state.running || (!state.fields.length && !state.doc);
   $('ocrMode').disabled           = state.running;
   $('ocrDoubleCheck').disabled    = state.running;
 
@@ -2571,6 +2846,8 @@ $('ocrDoubleCheck').checked = OCR_DOUBLE_CHECK;
    its name, or tick the box in the toolbar to show them all at once. */
 /* All the explanatory notes are folded away until the Info button is on, so
    the screen carries only what is needed to do the job. */
+$('ocrMode').addEventListener('change', () => showOcrStatus(state.pageKind));
+
 $('btnInfo').addEventListener('click', () => {
   document.body.classList.toggle('show-help');
   $('btnInfo').textContent = document.body.classList.contains('show-help')

@@ -37,6 +37,29 @@ It handles both kinds of spec sheet:
 The screen is kept bare on purpose: press **Info**, top right, to show the
 explanatory notes, and press it again to put them away.
 
+## Do I need OCR?
+
+You do not have to decide — leave **Reading** on *Automatic* and the right thing
+happens. The chip beside it tells you what the open PDF is:
+
+* **real text** — the sheet was made by a computer, the text is read exactly and
+  instantly, and OCR never runs.
+* **a scan** — the sheet is a picture of a page, so the text has to be recognised
+  from the image. About 5 seconds a page, and the first scanned page of a session
+  downloads roughly 15 MB of language data.
+* **hardly any text** — usually a scan carrying an invisible stamp. Automatic will
+  trust the little text there is, so if the cells come back empty choose *Force OCR*.
+
+A folder holding both kinds is fine: the decision is made page by page.
+
+## Picking up where you left off
+
+**Save Session** writes one file holding the boxes, the results table, and — unless
+you turn it off under Info — the PDFs themselves. **Open Session** puts all of it
+back: boxes, table, documents, per-file tweaks and column order, ready to click
+through or re-run. Nothing is kept in the browser, so the file works on any machine
+and can go in the job folder with the drawings.
+
 ## How to use it
 
 1. **Drop your folder of PDFs** onto the grey box at the top (sub-folders are
@@ -57,23 +80,27 @@ explanatory notes, and press it again to put them away.
    want the unit. In a text PDF the letter positions are estimated (the exact
    font is not available to the page), so leave a little air between your box
    edge and the unit.
-5. **Adjust boxes** any time: drag them, drag the red corner handles to resize,
+5. **If one PDF is laid out differently**, switch the toolbar to *This PDF only*.
+   Everything turns amber as a warning, and moving a box then changes it for that
+   one file — the field list shows a "moved on this PDF" badge with a **Reset**
+   button, and the box is drawn with a dashed edge.
+6. **Adjust boxes** any time: drag them, drag the red corner handles to resize,
    select one and nudge it with the arrow keys (hold Shift for bigger steps),
    rename it, or delete it with the `×` button. A box is only drawn on the page
    it belongs to, so page 2 is not cluttered with page 1's boxes — use **View**
    in the field list to jump to a field's page. Box names stay out of your way:
    point at a box (or select it) to see its name, or tick **Show all box names**
    above the page if you want them all at once.
-6. **Order the columns.** The field list is the column order: top of the list
+7. **Order the columns.** The field list is the column order: top of the list
    is the left-most column, and the file name is always last. Click a field
    (Ctrl+click or Shift+click for several), then press ↑/↓ or use the
    **Move up / Move down** buttons. The arrow keys do one of two jobs depending
    on which half of the screen you last clicked in — nudge the box on the page
    view, move the column in the field list — and the panel with an outline
    round it is the one that has them.
-7. **Press Run.** Every PDF is read in turn, with a progress bar. You get one row
+8. **Press Run.** Every PDF is read in turn, with a progress bar. You get one row
    per PDF and one column per field.
-8. **Check the results.** Rows are striped so a wide table stays readable.
+9. **Check the results.** Rows are striped so a wide table stays readable.
    Click any cell and the page it came from is redrawn with that box on it, the
    text it pulled out is printed underneath, and the whole row is boxed in so
    you can follow it across without losing your place.
@@ -85,11 +112,11 @@ explanatory notes, and press it again to put them away.
    * A **red** cell means that page could not be read — the PDF is a scan with
      no text in it, the PDF has fewer pages than the template expects, or the
      file would not open at all. Those rows are flagged for you to do by hand.
-9. **Export CSV** for the schedule. For the boxes, type a name in the
+10. **Export CSV** for the schedule. For the boxes, type a name in the
    **Template name** box and press **Export Template** — the name becomes the
    file name and is remembered inside the file, so it comes back when you load
    it again.
-10. **Next time**: open the page, *Import Template* (or just drop the template
+11. **Next time**: open the page, *Import Template* (or just drop the template
    `.json` onto the drop zone), drop the new folder, press Run. No redrawing.
    The template can be loaded before or after the PDFs — either order works.
 
