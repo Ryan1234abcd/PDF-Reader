@@ -34,6 +34,9 @@ It handles both kinds of spec sheet:
   tool tells you which handful of cells to look at. It doubles the time on
   scanned sheets; untick **Double-check scans** in the toolbar to turn it off.
 
+The screen is kept bare on purpose: press **Info**, top right, to show the
+explanatory notes, and press it again to put them away.
+
 ## How to use it
 
 1. **Drop your folder of PDFs** onto the grey box at the top (sub-folders are
@@ -47,11 +50,13 @@ It handles both kinds of spec sheet:
 3. **Repeat for every value** you want as a column. If a value lives on page 2,
    press *Next* to go to page 2 first, then draw — the field remembers the page
    it was drawn on. You can also change the page number in the field list.
-4. **Draw tight.** Only text whose middle is inside the box is taken, and on
-   scanned sheets that test is applied letter by letter. So a box around just
-   the number gives `4.0`, not `4.0 K`, and a box that stops above the next row
-   will not pick that row up. Draw around the number alone to get a clean
-   column; include the unit in the box if you want the unit.
+4. **Draw tight.** Only what is really inside the box is taken, letter by
+   letter — on scanned sheets and in ordinary text PDFs alike. A box around just
+   the number gives `11.000`, not `11.000m³/s`, and a box that stops above the
+   next row will not pick that row up. Include the unit in the box if you do
+   want the unit. In a text PDF the letter positions are estimated (the exact
+   font is not available to the page), so leave a little air between your box
+   edge and the unit.
 5. **Adjust boxes** any time: drag them, drag the red corner handles to resize,
    select one and nudge it with the arrow keys (hold Shift for bigger steps),
    rename it, or delete it with the `×` button. A box is only drawn on the page
@@ -108,6 +113,7 @@ uses no browser storage, so keep that file somewhere you can find it.
 | Wrapped lines run together oddly | Adjust `LINE_MERGE_TOLERANCE` (how far apart two bits of text can be and still count as one line) or `WORD_GAP_RATIO` (how wide a gap counts as a space). |
 | Boxes are slightly off on one supplier's sheets | Coordinates are stored as fractions of the page, so different paper sizes and rotated pages are handled. If a supplier has genuinely moved things, save a second template for them. |
 | *Import Template* seems to do nothing | Fixed. The hidden file inputs used to sit inside the drop zone, so opening the template chooser also opened the PDF chooser on top of it, and the `.json` was never picked. If you are on an older copy, replace it with this one. |
+| A unit is still coming through | Your box overlaps it. Shrink the box, or check that `TRIM_TO_BOX_EDGE` at the top of the file is `true`. |
 | Excel mangles accented characters | The CSV already carries the marker Excel needs; if your Excel is old, import it with *Data → From Text* and pick UTF-8. |
 
 All the tunable settings — CDN address, colours, tolerances, CSV options — are

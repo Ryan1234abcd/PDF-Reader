@@ -132,7 +132,7 @@ input[type=text], input[type=number]{
 
 /* --- drop zone ---------------------------------------------------------- */
 #dropZone{
-  border:2px dashed var(--line); border-radius:5px; padding:14px;
+  border:2px dashed var(--line); border-radius:5px; padding:9px;
   text-align:center; color:var(--muted); background:var(--panel);
   margin-bottom:10px; cursor:pointer;
 }
@@ -169,7 +169,13 @@ input[type=text], input[type=number]{
 /* --- main two-column layout --------------------------------------------- */
 .main{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap}
 .viewer{flex:1 1 620px; min-width:340px; overflow-x:auto}
-.side{flex:0 1 340px; min-width:280px}
+.side{
+  flex:0 1 340px; min-width:280px;
+  /* Stays beside the page as you scroll, so drawing a box does not bounce the
+     window back and forth between the picture and the list. */
+  position:sticky; top:6px; align-self:flex-start;
+  max-height:calc(100vh - 20px); overflow:auto;
+}
 
 /* --- the page canvas and the box overlay sitting exactly on top of it ---- */
 #canvasWrap{
@@ -213,7 +219,12 @@ body.show-all-names .fieldBox .tag{display:block}
 #reorderBar .note{color:var(--muted); font-size:11px}
 .fieldRow .top{display:flex; gap:6px; align-items:center}
 .fieldRow .top input[type=text]{flex:1; min-width:0}
-.hint{color:var(--muted); font-size:12px; margin:4px 0 10px}
+.hint{color:var(--muted); font-size:12px; margin:4px 0 10px; display:none}
+body.show-help .hint{display:block}
+#headerRow{display:flex; align-items:baseline; gap:10px}
+#headerRow h1{flex:1}
+#btnInfo{font-size:12px; padding:3px 10px}
+body.show-help #btnInfo{background:var(--accent); border-color:var(--accent); color:#fff}
 
 /* --- results table ------------------------------------------------------ */
 #tableWrap{margin-top:16px; overflow:auto; max-height:52vh; border:1px solid var(--line)}
@@ -255,7 +266,10 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 </head>
 <body>
 
-<h1>PDF Spec Sheet Extractor</h1>
+<div id="headerRow">
+  <h1>PDF Spec Sheet Extractor</h1>
+  <button type="button" id="btnInfo" title="Show or hide the explanatory notes">Info</button>
+</div>
 
 <div id="banner"></div>
 
@@ -268,11 +282,12 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 <input type="file" id="templatePicker" style="display:none">
 
 <div id="dropZone">
-  <b>Drop a folder of PDFs here</b> (or a multi-file selection) &mdash; or click to choose files.
-  A template <b>.json</b> file can be dropped here too.
-  <div style="margin-top:6px">
-    <button type="button" id="btnPickFolder">Choose folder&hellip;</button>
-    <button type="button" id="btnPickFiles">Choose files&hellip;</button>
+  <b>Drop a folder of PDFs here</b>, or
+  <button type="button" id="btnPickFolder">Choose folder&hellip;</button>
+  <button type="button" id="btnPickFiles">Choose files&hellip;</button>
+  <div class="hint" style="margin:6px 0 0">
+    Sub-folders are searched too, and anything that is not a .pdf is ignored.
+    A template <b>.json</b> file can be dropped here as well.
   </div>
 </div>
 
@@ -349,11 +364,17 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
       <span class="note" id="selectionNote"></span>
     </div>
     <div id="fieldList"></div>
-    <div class="hint" id="fieldEmptyHint">No fields yet.</div>
+    <div id="fieldEmptyHint" style="color:var(--muted);font-size:12px">No fields yet.</div>
   </div>
 </div>
 
-<h2 style="margin-top:18px">Results</h2>
+<div class="pager" id="bottomPager">
+  <button type="button" id="btnPrevPage2">&larr; Prev page</button>
+  <span id="pageLabel2">page &ndash; / &ndash;</span>
+  <button type="button" id="btnNextPage2">Next page &rarr;</button>
+</div>
+
+<h2 style="margin-top:14px">Results</h2>
 <div id="tableWrap"><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
 <div class="hint">
   Click any cell to see that PDF page with the box drawn on it and the text that was pulled out.
@@ -452,12 +473,17 @@ const BOX_TOLERANCE = 0;
    inside the box before it counts. */
 const MIN_ITEM_OVERLAP = 0.3;
 
-/* On scanned sheets, OCR often glues a value to its unit and reports "4.0K" or
-   "5.0°C" as ONE word. When such a word only half sits in your box, this uses
-   the individual letter positions OCR also provides to keep just the letters
-   that are actually inside it - so a box drawn around the number alone yields
-   "4.0", not "4.0K". Turn it off to always take such words whole. */
-const OCR_TRIM_PART_WORDS = true;
+/* Both real text and OCR often glue a value to its unit and hand it over as a
+   single piece: "4.0K", "5.0°C", "11.000m3/s". When such a piece only half sits
+   in your box, this keeps just the letters that are actually inside it, so a box
+   drawn around the number alone yields "11.000" and not "11.000m3/s".
+
+   On a scanned sheet the letter positions come from OCR and are exact. In a
+   text PDF they are worked out by measuring the letters in the browser and
+   scaling them to the width the PDF reports for the run, which is very close
+   but not perfect - so leave a little space between your box edge and the unit.
+   Turn this off to always take a piece of text whole. */
+const TRIM_TO_BOX_EDGE = true;
 
 /* Two text items are treated as being on the SAME LINE when their vertical
    positions are within this fraction of the page height of each other. */
@@ -839,6 +865,17 @@ async function showPdfPage(fileIndex, pageNum, skipUnreadable){
   }
 }
 
+
+/* --- the second set of page buttons, under the results ------------------- */
+function mirrorPagerButtons(){
+  $('pageLabel2').textContent = $('pageLabel').textContent;
+  $('btnPrevPage2').disabled  = $('btnPrevPage').disabled;
+  $('btnNextPage2').disabled  = $('btnNextPage').disabled;
+}
+
+$('btnPrevPage2').addEventListener('click', () => showPdfPage(state.view.fileIndex, state.view.pageNum - 1));
+$('btnNextPage2').addEventListener('click', () => showPdfPage(state.view.fileIndex, state.view.pageNum + 1));
+
 /* Page navigation and zoom buttons. */
 $('btnPrevPage').addEventListener('click', () => showPdfPage(state.view.fileIndex, state.view.pageNum - 1));
 $('btnNextPage').addEventListener('click', () => showPdfPage(state.view.fileIndex, state.view.pageNum + 1));
@@ -1105,8 +1142,17 @@ function extendSelectionTo(id){
 
 function afterSelectionChanged(){
   drawAllBoxes();
-  renderFieldList();
+  /* Only the highlighting changes, so the rows are left in place. Rebuilding
+     them here would throw away the very name box you just clicked into. */
+  updateFieldListHighlight();
   updateSelectionNote();
+}
+
+/** Move the "selected" highlight without rebuilding the list. */
+function updateFieldListHighlight(){
+  Array.from(document.querySelectorAll('.fieldRow')).forEach(row => {
+    row.classList.toggle('selected', isSelected(row.dataset.id));
+  });
 }
 
 /** Say what is selected, and which half of the screen the arrows belong to. */
@@ -1178,9 +1224,14 @@ function addField(rect){
   renderFieldList();
   refreshButtons();
 
-  /* Put the cursor straight into the new name so you can just type. */
+  /* Put the cursor straight into the new name so you can just type - without
+     letting the browser scroll the page to it, which used to throw you back up
+     to the field list every time a box was drawn. */
   const input = document.querySelector('.fieldRow[data-id="' + field.id + '"] input[type=text]');
-  if (input){ input.focus(); input.select(); }
+  if (input){
+    try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); }
+    input.select();
+  }
 }
 
 function deleteField(id){
@@ -1291,8 +1342,15 @@ function renderFieldList(){
     row.append(top);
 
     row.addEventListener('mousedown', (e) => {
-      if (e.target.tagName.toLowerCase() === 'button') return;
-      if (e.target.tagName.toLowerCase() === 'input')  { selectField(field.id); return; }
+      const tag = e.target.tagName.toLowerCase();
+      if (tag === 'button') return;
+      /* Clicking straight into the name or page box just selects the field and
+         lets the click through, so the cursor lands where you aimed it. */
+      if (tag === 'input'){
+        state.selectedIds = [field.id];
+        drawAllBoxes(); updateFieldListHighlight(); updateSelectionNote();
+        return;
+      }
       if (e.ctrlKey || e.metaKey)  toggleFieldSelected(field.id);
       else if (e.shiftKey)         extendSelectionTo(field.id);
       else                         selectField(field.id);
@@ -1309,6 +1367,53 @@ function renderFieldList(){
    where it sits. We turn each scrap into a plain rectangle measured in the
    same fractions the boxes use, then keep the scraps that overlap the box.
    =========================================================================== */
+
+/* A canvas kept aside purely for measuring how wide each letter is. */
+const letterMeasurer = (function(){
+  try { return document.createElement('canvas').getContext('2d'); }
+  catch (e) { return null; }
+})();
+
+/**
+ * Split one run of real text into a rectangle per letter.
+ *
+ * PDF.js hands over a whole run - "11.000m3/s" - as one piece with one
+ * rectangle, so without this a box drawn around the number alone would still
+ * collect the unit. The exact font is not available here, so the letters are
+ * measured in the browser and then stretched to fit the width PDF.js gives for
+ * the run: the proportions come out right even though the font is a stand-in.
+ */
+function splitRunIntoLetters(text, left, right, top, bottom){
+  if (text.length < 2) return null;
+
+  let widths = [];
+  let total = 0;
+  if (letterMeasurer){
+    try {
+      letterMeasurer.font = '100px sans-serif';
+      for (const ch of text){
+        const w = letterMeasurer.measureText(ch).width;
+        widths.push(w);
+        total += w;
+      }
+    } catch (e){ total = 0; }
+  }
+  /* No measuring available: fall back to giving every letter the same width. */
+  if (!(total > 0)){
+    widths = Array.from(text, () => 1);
+    total  = text.length;
+  }
+
+  const span = right - left;
+  const letters = [];
+  let x = left;
+  for (let i = 0; i < text.length; i++){
+    const w = span * (widths[i] / total);
+    letters.push({ text: text[i], left: x, right: x + w, top: top, bottom: bottom });
+    x += w;
+  }
+  return letters;
+}
 
 /**
  * Turn one PDF.js text item into { text, left, top, right, bottom, height },
@@ -1343,7 +1448,7 @@ function textItemToRect(item, viewport){
   const xs = corners.map(c => c[0]);
   const ys = corners.map(c => c[1]);
 
-  return {
+  const rect = {
     text  : item.str,
     left  : Math.min.apply(null, xs) / viewport.width,
     right : Math.max.apply(null, xs) / viewport.width,
@@ -1351,6 +1456,16 @@ function textItemToRect(item, viewport){
     bottom: Math.max.apply(null, ys) / viewport.height,
     height: height / viewport.height
   };
+
+  /* Straight, left-to-right text can be split letter by letter, so a box that
+     stops before the unit really does stop before the unit. Sideways or
+     right-to-left text is left in one piece, where the split would not hold. */
+  const straightAcross = Math.abs(alongY) < 0.02 && alongX > 0.98;
+  if (TRIM_TO_BOX_EDGE && straightAcross && item.dir !== 'rtl'){
+    rect.letters = splitRunIntoLetters(rect.text, rect.left, rect.right,
+                                       rect.top, rect.bottom);
+  }
+  return rect;
 }
 
 /** How much of rectangle A's area lies inside rectangle B (0..1). */
@@ -1389,7 +1504,7 @@ function isInsideBox(rect, box){
 function clipItemToBox(item, box){
   const letters = item.letters;
 
-  if (!OCR_TRIM_PART_WORDS || !letters || !letters.length){
+  if (!TRIM_TO_BOX_EDGE || !letters || !letters.length){
     return isInsideBox(item, box) ? item : null;
   }
 
@@ -2107,6 +2222,7 @@ function refreshButtons(){
   updateSelectionNote();
   $('btnPrevPage').disabled       = !state.view.doc || state.view.pageNum <= 1;
   $('btnNextPage').disabled       = !state.view.doc || state.view.pageNum >= state.view.pageCount;
+  mirrorPagerButtons();
   updateStatus();
 }
 
@@ -2142,6 +2258,14 @@ $('ocrDoubleCheck').checked = OCR_DOUBLE_CHECK;
 
 /* Box names are normally out of the way; point at a box (or select it) to see
    its name, or tick the box in the toolbar to show them all at once. */
+/* All the explanatory notes are folded away until the Info button is on, so
+   the screen carries only what is needed to do the job. */
+$('btnInfo').addEventListener('click', () => {
+  document.body.classList.toggle('show-help');
+  $('btnInfo').textContent = document.body.classList.contains('show-help')
+    ? 'Hide info' : 'Info';
+});
+
 $('showNames').addEventListener('change', () => {
   document.body.classList.toggle('show-all-names', $('showNames').checked);
 });
