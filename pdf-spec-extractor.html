@@ -191,10 +191,14 @@ label{white-space:nowrap}
   max-height:calc(100vh - 56px); overflow:auto;
 }
 
-/* Everything to do with the boxes sits in one block above the column list. */
+/* Everything to do with the boxes sits in one block above the column list -
+   and stays there. The panel below it is what scrolls, so the column arrows
+   are still under your hand at the bottom of a long list of fields. */
 #boxTools{
+  position:sticky; top:0; z-index:5;
   border:1px solid var(--line); border-radius:4px; padding:6px;
   background:var(--panel); margin-bottom:7px;
+  box-shadow:0 3px 5px -3px rgba(0,0,0,.25);
 }
 #boxTools .toolRow{display:flex; gap:5px; align-items:center; margin-bottom:5px}
 #boxTools .toolRow:last-child{margin-bottom:0}
@@ -452,11 +456,11 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 </div>
 
 <div class="pager" id="bottomPager">
-  <b>Results</b>
-  <span class="spacer"></span>
   <button type="button" id="btnPrevPage2">&larr;</button>
   <span id="pageLabel2">page &ndash; / &ndash;</span>
   <button type="button" id="btnNextPage2">&rarr;</button>
+  <span class="sep"></span>
+  <b>Results</b>
 </div>
 <div id="tableWrap"><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
 <div class="hint">
@@ -586,10 +590,7 @@ const WORD_GAP_RATIO = 0.22;
 const MIN_BOX_SIZE_PX   = 6;     /* smaller drags are ignored as stray clicks */
 const NUDGE_STEP        = 0.001; /* arrow key step, as a fraction of the page */
 const NUDGE_STEP_BIG    = 0.01;  /* with Shift held down                      */
-const DEFAULT_ZOOM      = 1.0;   /* 1.0 = the whole page fits on screen       */
-
-/* Room left under the picture for the strip of buttons and the results. */
-const VIEWER_BOTTOM_ROOM = 96;
+const DEFAULT_ZOOM      = 1.0;   /* 1.0 = the page fills the width available  */
 const ZOOM_STEP         = 0.25;
 const MAX_RENDER_SCALE  = 4;     /* safety cap so huge zoom cannot hang       */
 
@@ -897,20 +898,14 @@ const boxLayer  = $('boxLayer');
 const drawGhost = $('drawGhost');
 
 /**
- * How much to shrink a page so that all of it is in view at "100%".
- * Whichever of the width and the height runs out first decides.
+ * What "100%" means: the page drawn as wide as the space beside the field
+ * list allows. That is the size at which the print on a spec sheet is
+ * comfortably readable and a box can be drawn accurately; the zoom buttons
+ * take it from there.
  */
 function fitPageScale(baseViewport){
-  const wrap = $('canvasWrap');
-  const availableWidth = Math.max(300, wrap.parentElement.clientWidth - 4);
-
-  /* How far down the window the picture starts, measured independently of
-     wherever the page happens to be scrolled to. */
-  const topOfCanvas = wrap.getBoundingClientRect().top + window.scrollY;
-  const availableHeight = Math.max(360, window.innerHeight - topOfCanvas - VIEWER_BOTTOM_ROOM);
-
-  return Math.min(availableWidth / baseViewport.width,
-                  availableHeight / baseViewport.height);
+  const available = Math.max(300, $('canvasWrap').parentElement.clientWidth - 4);
+  return available / baseViewport.width;
 }
 
 /** Open (or reuse) the document for a given file index. */
@@ -962,9 +957,7 @@ async function showPdfPage(fileIndex, pageNum, skipUnreadable){
     state.view.baseW = base.width;
     state.view.baseH = base.height;
 
-    /* Fit the WHOLE page on screen - width and height both - and then apply
-       the zoom setting on top. Fitting the width alone made an A4 sheet taller
-       than the window, so every glance at the bottom half meant scrolling. */
+    /* Draw the page as wide as there is room for, then apply the zoom. */
     const scale = clamp(fitPageScale(base) * state.view.zoom, 0.05, MAX_RENDER_SCALE);
     const viewport = page.getViewport({ scale: scale });
 

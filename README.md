@@ -38,10 +38,10 @@ The screen is kept bare on purpose: press **Info**, top right, to show the
 explanatory notes, and press it again to put them away.
 
 The layout is the same in both tools: one bar of controls across the top (files,
-Run, CSV, sessions, reading mode), the page in the middle at a size that fits the
-whole sheet on screen, and everything to do with the boxes — template, which
-documents a move applies to, column order — grouped directly above the column
-list on the right.
+Run, CSV, sessions, reading mode), the page in the middle drawn as wide as there
+is room for, and everything to do with the boxes — template, which documents a
+move applies to, column order — grouped directly above the column list on the
+right, where it stays put while the list of columns scrolls under it.
 
 ## Do I need OCR?
 
