@@ -37,6 +37,12 @@ It handles both kinds of spec sheet:
 The screen is kept bare on purpose: press **Info**, top right, to show the
 explanatory notes, and press it again to put them away.
 
+The layout is the same in both tools: one bar of controls across the top (files,
+Run, CSV, sessions, reading mode), the page in the middle at a size that fits the
+whole sheet on screen, and everything to do with the boxes — template, which
+documents a move applies to, column order — grouped directly above the column
+list on the right.
+
 ## Do I need OCR?
 
 You do not have to decide — leave **Reading** on *Automatic* and the right thing

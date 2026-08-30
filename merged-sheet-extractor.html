@@ -123,38 +123,51 @@
 }
 *{box-sizing:border-box}
 body{
-  margin:0; padding:14px;
-  font:13px/1.45 "Segoe UI", Arial, Helvetica, sans-serif;
+  margin:0; padding:0 10px 14px;
+  font:13px/1.4 "Segoe UI", Arial, Helvetica, sans-serif;
   color:var(--ink); background:#fff;
 }
-h1{font-size:17px; margin:0 0 10px}
-h2{font-size:13px; margin:0 0 6px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted)}
 button{
-  font:inherit; padding:5px 11px; border:1px solid var(--line);
+  font:inherit; padding:3px 9px; border:1px solid var(--line);
   background:#fff; border-radius:3px; cursor:pointer;
 }
 button:hover:not(:disabled){background:#eef2f7}
-button:disabled{opacity:.45; cursor:default}
+button:disabled{opacity:.4; cursor:default}
 button.primary{background:var(--accent); border-color:var(--accent); color:#fff}
 button.primary:hover:not(:disabled){background:#0a55b0}
-input[type=text], input[type=number]{
-  font:inherit; padding:3px 5px; border:1px solid var(--line); border-radius:3px;
+button.quiet{border-color:transparent; color:var(--muted)}
+button.quiet:hover:not(:disabled){border-color:var(--line); color:var(--ink)}
+input[type=text], input[type=number], select{
+  font:inherit; padding:2px 5px; border:1px solid var(--line); border-radius:3px;
 }
-.toolbar{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px}
+h2{font-size:11px; margin:0 0 5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted)}
+
+/* --- the one bar of controls across the top ------------------------------ */
+#appBar{
+  position:sticky; top:0; z-index:20;
+  display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+  padding:7px 0 7px; margin-bottom:7px;
+  background:#fff; border-bottom:1px solid var(--line);
+}
+#appTitle{font-weight:700; margin-right:4px; white-space:nowrap}
+.toolbar{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:7px}
 .spacer{flex:1}
+.sep{width:1px; align-self:stretch; background:var(--line); margin:0 3px}
+label{white-space:nowrap}
 
 /* --- drop zone ---------------------------------------------------------- */
 #dropZone{
-  border:2px dashed var(--line); border-radius:5px; padding:9px;
+  border:1px dashed var(--line); border-radius:4px; padding:5px 9px;
   text-align:center; color:var(--muted); background:var(--panel);
-  margin-bottom:10px; cursor:pointer;
+  margin-bottom:6px; cursor:pointer; font-size:12px;
 }
 #dropZone.hot{border-color:var(--accent); background:#e8f1fd; color:var(--accent)}
 
 /* --- status ------------------------------------------------------------- */
 #statusLine{
-  padding:6px 9px; background:var(--panel); border:1px solid var(--line);
-  border-radius:3px; margin-bottom:10px; font-variant-numeric:tabular-nums;
+  padding:4px 9px; background:var(--panel); border:1px solid var(--line);
+  border-radius:3px; margin-bottom:7px; font-variant-numeric:tabular-nums;
+  font-size:12px;
 }
 #statusLine .bad{color:#b3261e; font-weight:600}
 #progressOuter{height:6px; background:#e2e6eb; border-radius:3px; margin-top:6px; display:none}
@@ -175,26 +188,40 @@ input[type=text], input[type=number]{
 #fileList li.flagged span::after{content:' - needs checking'; color:#b3261e; font-weight:400}
 #progressInner{height:100%; width:0%; background:var(--accent); border-radius:3px}
 #banner{
-  display:none; padding:9px 11px; border:1px solid #d33; background:#ffecec;
+  display:none; padding:7px 10px; border:1px solid #d33; background:#ffecec;
   color:#8b1a1a; border-radius:3px; margin-bottom:10px; white-space:pre-wrap;
 }
 
 /* --- main two-column layout --------------------------------------------- */
-.main{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap}
-.viewer{flex:1 1 620px; min-width:340px; overflow-x:auto}
+.main{display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap}
+.viewer{flex:1 1 640px; min-width:340px; overflow-x:auto}
 .side{
-  flex:0 1 340px; min-width:280px;
+  flex:0 1 300px; min-width:270px;
   /* Stays beside the page as you scroll, so drawing a box does not bounce the
      window back and forth between the picture and the list. */
-  position:sticky; top:6px; align-self:flex-start;
-  max-height:calc(100vh - 20px); overflow:auto;
+  position:sticky; top:46px; align-self:flex-start;
+  max-height:calc(100vh - 56px); overflow:auto;
 }
+
+/* Everything to do with the boxes sits in one block above the column list. */
+#boxTools{
+  border:1px solid var(--line); border-radius:4px; padding:6px;
+  background:var(--panel); margin-bottom:7px;
+}
+#boxTools .toolRow{display:flex; gap:5px; align-items:center; margin-bottom:5px}
+#boxTools .toolRow:last-child{margin-bottom:0}
+#boxTools .toolRow input[type=text],
+#boxTools .toolRow select{flex:1; min-width:0}
+#boxTools .note{color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+#fieldEmptyHint{color:var(--muted); font-size:12px}
 
 /* --- the page canvas and the box overlay sitting exactly on top of it ---- */
 #canvasWrap{
   position:relative; display:inline-block; line-height:0;
   border:1px solid var(--line); background:#fff;
 }
+.viewer{text-align:center}
+.viewer .pager, .viewer #previewInfo{text-align:left}
 #pageCanvas{display:block}
 #boxLayer{position:absolute; inset:0; cursor:crosshair}
 .fieldBox{
@@ -230,29 +257,23 @@ body.show-all-names .fieldBox .tag{display:block}
   font:700 10px "Segoe UI",Arial,sans-serif; color:#fff; background:var(--break);
   padding:1px 5px; border-radius:0 0 3px 3px; letter-spacing:.05em;
 }
-#sheetLabel{
-  margin:0 0 6px; padding:4px 8px; border-radius:3px; font-size:12px;
-  background:var(--panel); border:1px solid var(--line);
-}
+#sheetLabel{color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 #sheetLabel b{font-weight:700}
 /* While "this data sheet only" is on, the boxes and the switch turn amber, so
    nobody edits one sheet thinking they are editing them all. */
 body.scope-sheet .fieldBox{border-color:var(--override); background:rgba(191,110,0,.10)}
 body.scope-sheet .fieldBox .tag{background:var(--override)}
-body.scope-sheet #sheetBar{outline:2px solid var(--override); outline-offset:3px; border-radius:4px}
 .fieldBox.overridden{border-style:dashed}
-#btnScope.scopeOne{background:var(--override); border-color:var(--override); color:#fff}
+#editScope.scopeOne{background:var(--override); border-color:var(--override); color:#fff; font-weight:600}
 
 /* --- field list --------------------------------------------------------- */
 .fieldRow{
-  border:1px solid var(--line); border-radius:3px; padding:5px;
-  margin-bottom:4px; background:#fff; cursor:pointer;
+  border:1px solid var(--line); border-radius:3px; padding:4px;
+  margin-bottom:3px; background:#fff; cursor:pointer;
 }
 .fieldRow.selected{border-color:var(--box-selected); background:#fff5f5}
 .fieldRow .top input[type=text]{font-weight:600; min-width:110px}
 #fieldsPanel.active{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
-#reorderBar{display:flex; gap:6px; align-items:center; margin-bottom:7px}
-#reorderBar .note{color:var(--muted); font-size:11px}
 .chip{
   font-size:11px; padding:2px 8px; border-radius:10px;
   background:#e8eaed; color:var(--muted); white-space:nowrap;
@@ -264,13 +285,11 @@ body.scope-sheet #sheetBar{outline:2px solid var(--override); outline-offset:3px
 .hint{color:var(--muted); font-size:12px; margin:4px 0 10px; display:none}
 body.show-help .hint{display:block}
 body.show-help #sessionOptLabel{display:inline-block !important}
-#headerRow{display:flex; align-items:baseline; gap:10px}
-#headerRow h1{flex:1}
-#btnInfo{font-size:12px; padding:3px 10px}
+#btnInfo{font-size:12px}
 body.show-help #btnInfo{background:var(--accent); border-color:var(--accent); color:#fff}
 
 /* --- results table ------------------------------------------------------ */
-#tableWrap{margin-top:16px; overflow:auto; max-height:52vh; border:1px solid var(--line)}
+#tableWrap{overflow:auto; max-height:55vh; border:1px solid var(--line)}
 table{border-collapse:collapse; width:100%; font-size:12px}
 th,td{border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top}
 th{background:var(--panel); position:sticky; top:0; z-index:2; white-space:nowrap}
@@ -299,24 +318,57 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 
 /* --- preview panel ------------------------------------------------------ */
 #previewInfo{
-  margin-top:8px; padding:7px 9px; background:var(--panel);
+  margin-top:6px; padding:6px 9px; background:var(--panel);
   border:1px solid var(--line); border-radius:3px; font-size:12px;
   white-space:pre-wrap; word-break:break-word; display:none;
 }
 #previewInfo b{font-weight:600}
-.pager{display:flex; gap:6px; align-items:center; margin:8px 0}
+.pager{display:flex; gap:5px; align-items:center; margin:0 0 6px; flex-wrap:wrap}
+.pager #viewerSubject{color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+#bottomPager{margin:8px 0 5px}
+#sheetBar{font-size:12px}
+#sheetBar #breakEvery{width:46px}
+#zoomLabel,#pageLabel,#pageLabel2{font-variant-numeric:tabular-nums; color:var(--muted)}
 </style>
 </head>
 <body>
 
-<div id="headerRow">
-  <h1>Merged Spec Sheet Extractor</h1>
+<div id="appBar">
+  <span id="appTitle">Merged Spec Sheets</span>
+
+  <button type="button" id="btnPickFile">Open PDF&hellip;</button>
+  <button type="button" id="btnRun" class="primary" disabled>Run</button>
+  <button type="button" id="btnExportCsv" disabled>Export CSV</button>
+
+  <span class="sep"></span>
+
+  <button type="button" id="btnOpenSession" title="Open a saved session: the marks, the boxes, the table and the PDF, just as you left them">Open session&hellip;</button>
+  <button type="button" id="btnSaveSession" disabled title="Save the marks, the boxes, the results table and the PDF into one file you can open again later">Save session</button>
+  <label class="hint" style="display:none" id="sessionOptLabel">
+    <input type="checkbox" id="sessionWithPdfs" checked> with the PDF inside
+  </label>
+
+  <span class="spacer"></span>
+
+  <label title="Sheets made by a computer contain real text and are read exactly. Sheets that were scanned or photographed are just a picture, and have to be read by OCR. Leave this on Automatic and the right thing happens by itself.">
+    Reading
+    <select id="ocrMode">
+      <option value="auto" selected>Automatic</option>
+      <option value="always">Force OCR</option>
+      <option value="never">Never OCR</option>
+    </select>
+  </label>
+  <span id="ocrStatus" class="chip">no PDF open yet</span>
+  <label id="doubleCheckLabel" title="OCR is read twice at two different sizes and anything the two readings disagree about is flagged in orange. It doubles the time on scanned sheets and is the only reliable way to catch a decimal point OCR could not see.">
+    <input type="checkbox" id="ocrDoubleCheck" checked> Double-check
+  </label>
+
+  <button type="button" id="btnClearAll" class="quiet" title="Forget the PDF, the marks, the boxes and the results">Clear</button>
   <button type="button" id="btnInfo" title="Show or hide the explanatory notes">Info</button>
 </div>
 
 <div id="banner"></div>
 
-<!-- Top: drop zone + the four buttons ------------------------------------- -->
 <!-- The hidden file inputs deliberately live OUTSIDE the drop zone. Inside it,
      the click that opens one of them would bubble up to the drop zone, whose own
      click handler would then open a second file dialog on top of the first. -->
@@ -325,43 +377,8 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 <input type="file" id="sessionPicker" style="display:none">
 
 <div id="dropZone">
-  <b>Drop the merged PDF here</b>, or
-  <button type="button" id="btnPickFile">Choose PDF&hellip;</button>
-  <div class="hint" style="margin:6px 0 0">
-    A template <b>.json</b> file can be dropped here as well.
-  </div>
+  Drop the merged PDF here. A template or session <b>.json</b> can be dropped here too.
 </div>
-
-<div class="toolbar">
-  <button type="button" id="btnImportTemplate">Import Template</button>
-  <label title="The name this template is saved under, and the name of the file">
-    <input type="text" id="templateName" placeholder="Template name" size="18">
-  </label>
-  <button type="button" id="btnExportTemplate" disabled>Export Template</button>
-  <button type="button" id="btnRun" class="primary" disabled>Run</button>
-  <label title="Sheets made by a computer contain real text and are read exactly. Sheets that were scanned or photographed are just a picture, and have to be read by OCR - handwriting-recognition for print. Leave this on Automatic and the right thing happens by itself.">
-    Reading:
-    <select id="ocrMode">
-      <option value="auto" selected>Automatic (recommended)</option>
-      <option value="always">Force OCR on every page</option>
-      <option value="never">Never use OCR</option>
-    </select>
-  </label>
-  <span id="ocrStatus" class="chip">no PDF open yet</span>
-  <label id="doubleCheckLabel" title="OCR is read twice at two different sizes and anything the two readings disagree about is flagged in orange. It doubles the time on scanned sheets and is the only reliable way to catch a decimal point OCR could not see.">
-    <input type="checkbox" id="ocrDoubleCheck" checked> Double-check
-  </label>
-  <button type="button" id="btnExportCsv" disabled>Export CSV</button>
-  <span style="width:8px"></span>
-  <button type="button" id="btnSaveSession" disabled title="Save the boxes, the results table and the PDFs into one file you can open again later">Save Session</button>
-  <button type="button" id="btnOpenSession">Open Session</button>
-  <label class="hint" style="display:none" id="sessionOptLabel">
-    <input type="checkbox" id="sessionWithPdfs" checked> include the PDFs in the session file
-  </label>
-  <span class="spacer"></span>
-  <button type="button" id="btnClearAll">Clear everything</button>
-</div>
-
 
 <div class="hint" id="ocrHelp" style="margin:-4px 0 10px">
   <b>About "Reading":</b> a spec sheet is one of two things.
@@ -397,40 +414,39 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
   </details>
 </div>
 
-<div class="toolbar" id="sheetBar">
-  <b>Data sheets:</b>
-  <button type="button" id="btnToggleBreak" disabled>Start a data sheet on this page</button>
-  <span class="spacer" style="flex:0 0 10px"></span>
-  <label title="When every data sheet is the same length, mark them all in one go">
-    every <input type="number" id="breakEvery" value="2" min="1" step="1" style="width:52px"> pages
-    <button type="button" id="btnBreakEvery" disabled>Mark them all</button>
-  </label>
-  <button type="button" id="btnClearBreaks" disabled>Clear the marks</button>
-  <span class="spacer"></span>
-  <button type="button" id="btnScope" title="Moving a box normally moves it on every data sheet. Press this when one sheet is laid out differently, and the change stays on the sheet you are looking at.">Changing: every data sheet</button>
-  <button type="button" id="btnResetBox" disabled title="Put the selected box back to the position shared by every data sheet">Reset box</button>
-</div>
-
 <div class="main">
   <!-- LEFT: the page image you draw on -->
   <div class="viewer">
-    <h2>Page view <span id="viewerSubject" style="text-transform:none;font-weight:400"></span></h2>
     <div class="pager">
-      <button type="button" id="btnPrevSheet" title="Go to the previous data sheet">&laquo; Sheet</button>
-      <button type="button" id="btnPrevPage">&larr; Prev</button>
+      <button type="button" id="btnPrevSheet" title="Previous data sheet">&laquo;</button>
+      <button type="button" id="btnPrevPage">&larr;</button>
       <span id="pageLabel">page &ndash; / &ndash;</span>
-      <button type="button" id="btnNextPage">Next &rarr;</button>
-      <button type="button" id="btnNextSheet" title="Go to the next data sheet">Sheet &raquo;</button>
-      <span style="width:12px"></span>
-      <button type="button" id="btnZoomOut">&minus;</button>
-      <button type="button" id="btnZoomIn">+</button>
+      <button type="button" id="btnNextPage">&rarr;</button>
+      <button type="button" id="btnNextSheet" title="Next data sheet">&raquo;</button>
+      <span class="sep"></span>
+      <button type="button" id="btnZoomOut" title="Zoom out">&minus;</button>
       <span id="zoomLabel">100%</span>
-      <span style="width:12px"></span>
+      <button type="button" id="btnZoomIn" title="Zoom in">+</button>
+      <span class="sep"></span>
       <label title="Names always cover part of the page. Leave this off and a name only appears when you point at its box or select it.">
-        <input type="checkbox" id="showNames"> Show all box names
+        <input type="checkbox" id="showNames"> names
       </label>
+      <span id="viewerSubject"></span>
     </div>
-    <div id="sheetLabel">No data sheets marked yet</div>
+
+    <!-- the marks that say where each data sheet begins -->
+    <div class="pager" id="sheetBar">
+      <button type="button" id="btnToggleBreak" disabled>Start a data sheet here</button>
+      <span class="sep"></span>
+      <label title="When every data sheet is the same length, mark them all in one go">
+        every <input type="number" id="breakEvery" value="2" min="1" step="1"> pages
+      </label>
+      <button type="button" id="btnBreakEvery" disabled>Mark all</button>
+      <button type="button" id="btnClearBreaks" class="quiet" disabled>Clear marks</button>
+      <span class="sep"></span>
+      <span id="sheetLabel">No data sheets marked yet</span>
+    </div>
+
     <div id="canvasWrap">
       <canvas id="pageCanvas" width="10" height="10"></canvas>
       <div id="boxLayer"><div id="drawGhost"></div><div id="breakLine"></div></div>
@@ -438,9 +454,28 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
     <div id="previewInfo"></div>
   </div>
 
-  <!-- RIGHT: the list of fields (columns) -->
+  <!-- RIGHT: everything to do with the boxes, then the columns themselves -->
   <div class="side" id="fieldsPanel" tabindex="0">
-    <h2>Fields / columns <span style="text-transform:none;font-weight:400;color:var(--muted)">&mdash; top of the list is the left-most column</span></h2>
+    <div id="boxTools">
+      <div class="toolRow">
+        <input type="text" id="templateName" placeholder="Template name" title="The name this template is saved under, and the name of the file">
+        <button type="button" id="btnImportTemplate" title="Load a set of boxes from a template file">Open</button>
+        <button type="button" id="btnExportTemplate" disabled title="Save these boxes as a template file">Save</button>
+      </div>
+      <div class="toolRow">
+        <select id="editScope" title="Moving a box normally moves it on every data sheet. Switch this when one sheet is laid out differently.">
+          <option value="all" selected>Move boxes on every sheet</option>
+          <option value="one">Move boxes on this sheet only</option>
+        </select>
+        <button type="button" id="btnResetBox" disabled title="Put the selected box back to the position shared by every data sheet">Reset</button>
+      </div>
+      <div class="toolRow">
+        <button type="button" id="btnMoveUp" title="Move the selected columns left">&uarr;</button>
+        <button type="button" id="btnMoveDown" title="Move the selected columns right">&darr;</button>
+        <span class="note" id="selectionNote"></span>
+      </div>
+    </div>
+
     <div class="hint">
       Drag on the page image to draw a box, then type its name. The same box is
       then used on every data sheet, on the same page within each one. Only what
@@ -448,31 +483,25 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
       unit beside it (&deg;C, K, kW) is left out.
       <br>Click the page image, then the arrow keys <b>nudge</b> the selected box.
       Click a field below, then the arrow keys <b>move the column</b> up and down.
-      Ctrl+click (or Shift+click) to pick several at once.
+      Top of the list is the left-most column.
+      <br><b>Sheet page</b> is the page <i>within</i> a data sheet: 1 is the page
+      the data sheet starts on, 2 is the one after it.
     </div>
-    <div id="reorderBar">
-      <button type="button" id="btnMoveUp" title="Move the selected columns left">&uarr; Move up</button>
-      <button type="button" id="btnMoveDown" title="Move the selected columns right">&darr; Move down</button>
-      <span class="note" id="selectionNote"></span>
-    </div>
+
     <div id="fieldList"></div>
-    <div id="fieldEmptyHint" style="color:var(--muted);font-size:12px">No fields yet.</div>
-    <div class="hint">
-      <b>Sheet page</b> is the page <i>within</i> a data sheet: 1 is the page the
-      data sheet starts on, 2 is the one after it.
-    </div>
+    <div id="fieldEmptyHint">No fields yet &mdash; draw a box on the page.</div>
   </div>
 </div>
 
 <div class="pager" id="bottomPager">
-  <button type="button" id="btnPrevSheet2">&laquo; Sheet</button>
-  <button type="button" id="btnPrevPage2">&larr; Prev page</button>
+  <b>Results</b>
+  <span class="spacer"></span>
+  <button type="button" id="btnPrevSheet2" title="Previous data sheet">&laquo;</button>
+  <button type="button" id="btnPrevPage2">&larr;</button>
   <span id="pageLabel2">page &ndash; / &ndash;</span>
-  <button type="button" id="btnNextPage2">Next page &rarr;</button>
-  <button type="button" id="btnNextSheet2">Sheet &raquo;</button>
+  <button type="button" id="btnNextPage2">&rarr;</button>
+  <button type="button" id="btnNextSheet2" title="Next data sheet">&raquo;</button>
 </div>
-
-<h2 style="margin-top:14px">Results</h2>
 <div id="tableWrap"><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
 <div class="hint">
   One row per data sheet. Click any cell to see the page it came from, with the box
@@ -602,7 +631,10 @@ const WORD_GAP_RATIO = 0.22;
 const MIN_BOX_SIZE_PX   = 6;     /* smaller drags are ignored as stray clicks */
 const NUDGE_STEP        = 0.001; /* arrow key step, as a fraction of the page */
 const NUDGE_STEP_BIG    = 0.01;  /* with Shift held down                      */
-const DEFAULT_ZOOM      = 1.0;   /* 1.0 = fit the page to the panel width     */
+const DEFAULT_ZOOM      = 1.0;   /* 1.0 = the whole page fits on screen       */
+
+/* Room left under the picture for the strip of buttons and the results. */
+const VIEWER_BOTTOM_ROOM = 96;
 const ZOOM_STEP         = 0.25;
 const MAX_RENDER_SCALE  = 4;     /* safety cap so huge zoom cannot hang       */
 
@@ -979,6 +1011,23 @@ const canvas    = $('pageCanvas');
 const boxLayer  = $('boxLayer');
 const drawGhost = $('drawGhost');
 
+/**
+ * How much to shrink a page so that all of it is in view at "100%".
+ * Whichever of the width and the height runs out first decides.
+ */
+function fitPageScale(baseViewport){
+  const wrap = $('canvasWrap');
+  const availableWidth = Math.max(300, wrap.parentElement.clientWidth - 4);
+
+  /* How far down the window the picture starts, measured independently of
+     wherever the page happens to be scrolled to. */
+  const topOfCanvas = wrap.getBoundingClientRect().top + window.scrollY;
+  const availableHeight = Math.max(360, window.innerHeight - topOfCanvas - VIEWER_BOTTOM_ROOM);
+
+  return Math.min(availableWidth / baseViewport.width,
+                  availableHeight / baseViewport.height);
+}
+
 /** Draw one page of the merged PDF and put the boxes for its data sheet on it. */
 async function showPage(pageNum){
   if (!state.doc) return;
@@ -992,9 +1041,10 @@ async function showPage(pageNum){
     state.view.baseW = base.width;
     state.view.baseH = base.height;
 
-    /* Fit the page to the width of the panel, then apply the zoom setting. */
-    const available = Math.max(300, $('canvasWrap').parentElement.clientWidth - 4);
-    const scale = clamp((available / base.width) * state.view.zoom, 0.05, MAX_RENDER_SCALE);
+    /* Fit the WHOLE page on screen - width and height both - and then apply
+       the zoom setting on top. Fitting the width alone made an A4 sheet taller
+       than the window, so every glance at the bottom half meant scrolling. */
+    const scale = clamp(fitPageScale(base) * state.view.zoom, 0.05, MAX_RENDER_SCALE);
     const viewport = page.getViewport({ scale: scale });
 
     canvas.width  = Math.floor(viewport.width);
@@ -1033,11 +1083,9 @@ function updateSheetLabel(){
   const within = pageWithinSheet(state.view.pageNum);
 
   label.innerHTML =
-    'Showing <b>data sheet ' + sheet.number + ' of ' + sheets.length + '</b>' +
-    ' (pages ' + sheet.startPage +
-    (sheet.endPage > sheet.startPage ? '&ndash;' + sheet.endPage : '') + ')' +
-    ' &nbsp;|&nbsp; this is <b>page ' + within + '</b> of that data sheet' +
-    (pageStartsASheet(state.view.pageNum) ? ' &nbsp;|&nbsp; a data sheet starts here' : '');
+    '<b>sheet ' + sheet.number + ' of ' + sheets.length + '</b> (pages ' +
+    sheet.startPage + (sheet.endPage > sheet.startPage ? '&ndash;' + sheet.endPage : '') +
+    ') &middot; sheet page <b>' + within + '</b>';
 
   /* The thick red line across the top of a page that begins a data sheet. */
   $('breakLine').style.display = pageStartsASheet(state.view.pageNum) ? 'block' : 'none';
@@ -1127,9 +1175,9 @@ function afterBreaksChanged(keepRows){
 }
 
 /* Changing the edit scope re-colours the boxes, so the mode is never a guess. */
-$('btnScope').addEventListener('click', () => {
-  state.editScope = state.editScope === 'one' ? 'all' : 'one';
-  refreshScopeButton();
+$('editScope').addEventListener('change', () => {
+  state.editScope = $('editScope').value;
+  refreshScopeControl();
   drawAllBoxes();
 });
 
@@ -1580,7 +1628,8 @@ function renderFieldList(){
     });
 
     const pageLbl = document.createElement('span');
-    pageLbl.textContent = 'sheet page';
+    pageLbl.textContent = 'pg';
+    pageLbl.title = 'Which page WITHIN each data sheet this value sits on';
     pageLbl.style.color = 'var(--muted)';
 
     const page = document.createElement('input');
@@ -2775,15 +2824,15 @@ function refreshButtons(){
   $('btnToggleBreak').disabled = !open || state.running;
   $('btnBreakEvery').disabled  = !open || state.running;
   $('btnClearBreaks').disabled = !open || state.running || state.breaks.length <= 1;
-  $('btnScope').disabled       = state.running;
+  $('editScope').disabled      = state.running;
   $('btnResetBox').disabled    = state.running ||
     !selectedFields().some(f => hasOverride(f, currentSheetIndex()));
 
   /* The break button says which of the two things it will do. */
   if (open){
     $('btnToggleBreak').textContent = pageStartsASheet(state.view.pageNum)
-      ? 'Remove the mark on this page'
-      : 'Start a data sheet on this page';
+      ? 'Remove the mark here'
+      : 'Start a data sheet here';
   }
   mirrorPagerButtons();
   updateSelectionNote();
@@ -2823,17 +2872,19 @@ window.addEventListener('resize', () => {
    the exported template JSON file is the only place anything is kept. */
 
 $('ocrDoubleCheck').checked = OCR_DOUBLE_CHECK;
-refreshScopeButton();
+refreshScopeControl();
 
 /* Box names are normally out of the way; point at a box (or select it) to see
    its name, or tick the box in the toolbar to show them all at once. */
 /* All the explanatory notes are folded away until the Info button is on, so
    the screen carries only what is needed to do the job. */
-/** Keep the toggle's wording and colour matching what it will actually do. */
-function refreshScopeButton(){
+/** Keep the page in step with what the drop-down is set to. */
+function refreshScopeControl(){
   const one = state.editScope === 'one';
-  $('btnScope').textContent = one ? 'Changing: THIS data sheet only' : 'Changing: every data sheet';
-  $('btnScope').classList.toggle('scopeOne', one);
+  $('editScope').value = state.editScope;
+  $('editScope').classList.toggle('scopeOne', one);
+  /* The boxes turn amber while one data sheet is being changed on its own, so
+     nobody moves a box thinking they are moving it everywhere. */
   document.body.classList.toggle('scope-sheet', one);
 }
 
