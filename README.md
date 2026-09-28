@@ -60,8 +60,19 @@ A folder holding both kinds is fine: the decision is made page by page.
 
 ## Picking up where you left off
 
-Type a **job name** in the top bar. **Export CSV + session** then writes two files
-under that name: `<job name>.csv` and `<job name>.session.html`.
+Type a **job name** in the top bar. **Export Excel + session** then writes two files
+under that name: `<job name>.xlsx` and `<job name>.session.html` — no converting and
+no saving-as.
+
+The workbook is a proper `.xlsx`, written by the page itself rather than by another
+downloaded library. It comes out ready to hand on: header row bold and frozen with
+filter buttons, columns widened to their contents, and values that are plainly
+numbers stored as numbers so they sort and add up — while keeping the decimals they
+were written with, so `11.000` still reads `11.000` and not `11`. Model codes, part
+numbers and anything with a leading zero stay as text. Cells the tool was unsure of
+carry their colour into the workbook: orange where the two OCR readings disagreed,
+red where a page could not be read. A plain **CSV** button is there too, under
+**Info**, for feeding something else.
 
 The session file is a copy of the whole app with the work tucked inside it — the
 boxes, the results table, the per-document tweaks, the column order and, unless you
@@ -164,7 +175,8 @@ uses no browser storage, so keep that file somewhere you can find it.
 | Boxes are slightly off on one supplier's sheets | Coordinates are stored as fractions of the page, so different paper sizes and rotated pages are handled. If a supplier has genuinely moved things, save a second template for them. |
 | *Import Template* seems to do nothing | Fixed. The hidden file inputs used to sit inside the drop zone, so opening the template chooser also opened the PDF chooser on top of it, and the `.json` was never picked. If you are on an older copy, replace it with this one. |
 | A unit is still coming through | Your box overlaps it. Shrink the box, or check that `TRIM_TO_BOX_EDGE` at the top of the file is `true`. |
-| Excel mangles accented characters | The CSV already carries the marker Excel needs; if your Excel is old, import it with *Data → From Text* and pick UTF-8. |
+| Excel mangles accented characters | Only affects the optional CSV; the workbook has no such problem. If you need the CSV, import it with *Data → From Text* and pick UTF-8. |
+| A value you expect to add up is text in Excel | It has a unit or a letter in it, or a leading zero, so it was kept exactly as read. Draw the box around the number alone and it comes out as a number. |
 
 All the tunable settings — CDN address, colours, tolerances, CSV options — are
 grouped together in the `CONFIGURATION` block near the top of the file.

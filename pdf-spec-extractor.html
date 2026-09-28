@@ -14,7 +14,7 @@
     1. You drop a folder of PDF spec sheets onto the page.
     2. You draw boxes on the page image and name them (one box = one column).
     3. You press Run. Every PDF is read and one row of data is produced per PDF.
-    4. You export the table as CSV and the boxes as a template JSON file.
+    4. You export the table as an Excel workbook and the boxes as a template file.
     5. Next time: import the template, drop the folder, press Run. No redrawing.
 
   SCANNED (IMAGE-ONLY) SHEETS
@@ -264,6 +264,7 @@ body.show-all-names .fieldBox .tag{display:block}
 .hint{color:var(--muted); font-size:12px; margin:4px 0 10px; display:none}
 body.show-help .hint{display:block}
 body.show-help #sessionOptLabel{display:inline-block !important}
+body.show-help #btnExportCsv{display:inline-block !important}
 #btnInfo{font-size:12px}
 body.show-help #btnInfo{background:var(--accent); border-color:var(--accent); color:#fff}
 
@@ -316,7 +317,8 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
   <button type="button" id="btnPickFiles">Add PDFs&hellip;</button>
   <button type="button" id="btnPickFolder">Add folder&hellip;</button>
   <button type="button" id="btnRun" class="primary" disabled>Run</button>
-  <button type="button" id="btnExportCsv" disabled title="Writes the schedule as a CSV and saves the session beside it, both under the name below">Export CSV + session</button>
+  <button type="button" id="btnExportXlsx" disabled title="Writes the schedule as an Excel workbook and saves the session beside it, both under the name below">Export Excel + session</button>
+  <button type="button" id="btnExportCsv" class="hint quiet" style="display:none" disabled title="The same schedule as a plain CSV, for feeding into something else">CSV</button>
   <input type="text" id="sessionName" placeholder="Job name" size="16"
          title="The name the CSV and the session file are both saved under">
 
@@ -2313,6 +2315,40 @@ function csvEscape(value){
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
+/**
+ * The schedule as it stands: the column names, and a cell per column carrying
+ * its text and whether it is one to look at again.
+ */
+function scheduleForExport(){
+  const headers = state.fields.map(f => f.name).concat([CSV_FILENAME_COLUMN]);
+  const rows = state.rows.map(row => state.fields.map(f => {
+    const c = row.cells[f.name];
+    if (!c) return { text: '', flag: '' };
+    if (c.status === 'ok' || c.status === 'empty') return { text: c.text, flag: '' };
+    if (c.status === 'check') return { text: c.text, flag: 'check' };
+    return { text: CELL_ERROR_TEXT[c.status] || '', flag: 'error' };
+  }).concat([{ text: row.file, flag: '' }]));
+  return { headers: headers, rows: rows };
+}
+
+$('btnExportXlsx').addEventListener('click', () => {
+  if (!state.rows.length) return;
+  try {
+    const schedule = scheduleForExport();
+    const name  = sessionFileName();
+    const bytes = buildWorkbook(schedule.headers, schedule.rows, 'Schedule');
+    downloadBytes(name + '.xlsx', bytes,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+    /* The session is saved at the same moment and under the same name, so the
+       schedule and the work behind it never drift apart. The browser is given a
+       breath between the two, or it quietly drops the second download. */
+    setTimeout(() => saveSession(name), 700);
+  } catch (err){
+    showBanner('The workbook could not be written: ' + err.message);
+  }
+});
+
 $('btnExportCsv').addEventListener('click', () => {
   if (!state.rows.length) return;
   /* Columns come out in the order of the field list, with the file name last. */
@@ -2332,13 +2368,7 @@ $('btnExportCsv').addEventListener('click', () => {
   }
 
   const text = (CSV_ADD_BOM ? '﻿' : '') + lines.join('\r\n') + '\r\n';
-  const name = sessionFileName();
-  downloadTextFile(name + '.csv', text, 'text/csv;charset=utf-8');
-
-  /* The session is saved at the same moment and under the same name, so the
-     schedule and the work behind it never drift apart. The browser is given a
-     breath between the two, or it quietly drops the second download. */
-  setTimeout(() => saveSession(name), 700);
+  downloadTextFile(sessionFileName() + '.csv', text, 'text/csv;charset=utf-8');
 });
 
 /** Turn whatever was typed into something safe to use as a file name. */
@@ -2646,6 +2676,298 @@ async function applySession(parsed){
 
 
 
+
+/* ===========================================================================
+   12d. WRITING AN EXCEL WORKBOOK
+
+   An .xlsx file is a ZIP holding a handful of XML files, so the whole thing is
+   written here rather than by pulling in another library: one less thing to
+   download, and one less thing to swap for a local copy on a locked-down
+   machine. Nothing is compressed - the parts are tiny - which keeps the ZIP
+   writing down to the few lines below.
+   =========================================================================== */
+
+/* Cells whose reading needs a human eye are tinted in the workbook, the same
+   as they are on screen, so the warning travels with the schedule. */
+const XLSX_CHECK_COLOUR = 'FFFFE8CC';   /* the two OCR readings disagreed */
+const XLSX_ERROR_COLOUR = 'FFFFDCDC';   /* could not be read at all       */
+const XLSX_HEADER_COLOUR = 'FFEFF2F6';
+
+/* Write a value that is plainly a number as a number, so Excel can sum and
+   sort it without the "number stored as text" warning. Anything with a letter,
+   a symbol or a leading zero in front of another digit stays as text, which
+   keeps part numbers and model codes intact. */
+const XLSX_NUMBERS_AS_NUMBERS = true;
+
+/* The most decimal places a value can be shown with. "11.000" keeps its three
+   zeros; anything longer is shown as Excel sees fit. */
+const MAX_DECIMALS = 4;
+
+/** Does this value deserve to go into the sheet as a real number? */
+function looksLikeAPlainNumber(text){
+  if (!XLSX_NUMBERS_AS_NUMBERS) return false;
+  if (!/^-?\d+(\.\d+)?$/.test(text)) return false;   /* digits, one dot, sign */
+  if (/^-?0\d/.test(text)) return false;             /* 040.1 is a code       */
+  if (text.replace(/\D/g, '').length > 15) return false;  /* beyond Excel     */
+  return true;
+}
+
+/** The few characters that would otherwise break the XML. */
+function xmlEscape(text){
+  return String(text).replace(/[&<>"']/g, c => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&apos;' }[c]
+  )).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');   /* Excel rejects these */
+}
+
+/** Column 1 is A, 27 is AA, and so on. */
+function columnLetter(index){
+  let name = '';
+  while (index > 0){
+    const remainder = (index - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    index = Math.floor((index - 1) / 26);
+  }
+  return name;
+}
+
+/* --- the smallest ZIP that Excel will accept ------------------------------ */
+
+const CRC_TABLE = (function(){
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++){
+    let value = i;
+    for (let bit = 0; bit < 8; bit++){
+      value = (value & 1) ? (0xEDB88320 ^ (value >>> 1)) : (value >>> 1);
+    }
+    table[i] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes){
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++){
+    crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/**
+ * Pack named pieces of text into a ZIP. Everything is stored as-is rather than
+ * compressed, which is what keeps this short enough to read.
+ */
+function makeZip(parts){
+  const encoder = new TextEncoder();
+  const chunks  = [];
+  const central = [];
+  let offset = 0;
+
+  const u16 = (n) => [n & 0xFF, (n >>> 8) & 0xFF];
+  const u32 = (n) => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
+
+  for (const part of parts){
+    const nameBytes = encoder.encode(part.name);
+    const data      = encoder.encode(part.text);
+    const sum       = crc32(data);
+
+    const localHeader = [].concat(
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+      u32(sum), u32(data.length), u32(data.length),
+      u16(nameBytes.length), u16(0));
+
+    chunks.push(new Uint8Array(localHeader), nameBytes, data);
+
+    central.push({
+      header: [].concat(
+        u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+        u32(sum), u32(data.length), u32(data.length),
+        u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0), u32(0),
+        u32(offset)),
+      nameBytes: nameBytes
+    });
+
+    offset += localHeader.length + nameBytes.length + data.length;
+  }
+
+  const directoryStart = offset;
+  let directoryLength = 0;
+  for (const entry of central){
+    chunks.push(new Uint8Array(entry.header), entry.nameBytes);
+    directoryLength += entry.header.length + entry.nameBytes.length;
+  }
+  chunks.push(new Uint8Array([].concat(
+    u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length),
+    u32(directoryLength), u32(directoryStart), u16(0))));
+
+  let total = 0;
+  for (const chunk of chunks) total += chunk.length;
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks){ out.set(chunk, at); at += chunk.length; }
+  return out;
+}
+
+/* --- the workbook itself --------------------------------------------------- */
+
+/**
+ * Build an .xlsx from the table on screen.
+ * rows are arrays of { text, flag } where flag is '', 'check' or 'error'.
+ */
+function buildWorkbook(headers, rows, sheetName){
+  const lastColumn = columnLetter(headers.length);
+
+  /* Widen each column to roughly its longest value, within reason. */
+  const widths = headers.map((head, i) => {
+    let longest = String(head).length;
+    for (const row of rows){
+      const cell = row[i];
+      if (cell && cell.text) longest = Math.max(longest, cell.text.length);
+    }
+    return Math.min(Math.max(longest + 2, 9), 46);
+  });
+
+  /* A cell's look is picked from two things: whether it needs checking, and
+     how many decimals the value was written with. "11.000" is stored as the
+     number 11 but shown with its three decimals, so the schedule reads exactly
+     as the sheet did while still adding up. */
+  const HEADER_STYLE = 1;
+  const FILL_SLOTS   = { '': 0, check: 1, error: 2 };
+  const styleFor = (flag, decimals) =>
+    2 + (FILL_SLOTS[flag] || 0) * (MAX_DECIMALS + 1) + decimals;
+
+  const cell = (ref, value, flag) => {
+    if (value === '') return '<c r="' + ref + '" s="' + styleFor(flag, 0) + '"/>';
+
+    if (looksLikeAPlainNumber(value)){
+      const dot = value.indexOf('.');
+      const decimals = dot < 0 ? 0 : Math.min(value.length - dot - 1, MAX_DECIMALS);
+      return '<c r="' + ref + '" s="' + styleFor(flag, decimals) + '"><v>' +
+             value + '</v></c>';
+    }
+    return '<c r="' + ref + '" t="inlineStr" s="' + styleFor(flag, 0) +
+           '"><is><t xml:space="preserve">' + xmlEscape(value) + '</t></is></c>';
+  };
+
+  const lines = [];
+  lines.push('<row r="1">' + headers.map((head, i) =>
+    '<c r="' + columnLetter(i + 1) + '1" t="inlineStr" s="' + HEADER_STYLE +
+    '"><is><t xml:space="preserve">' + xmlEscape(String(head)) + '</t></is></c>').join('') +
+    '</row>');
+
+  rows.forEach((row, rowIndex) => {
+    const number = rowIndex + 2;
+    lines.push('<row r="' + number + '">' + row.map((value, i) =>
+      cell(columnLetter(i + 1) + number, value.text || '', value.flag || '')).join('') +
+      '</row>');
+  });
+
+  const sheet =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<sheetViews><sheetView tabSelected="1" workbookViewId="0">' +
+    /* the header row stays on screen while the schedule is scrolled */
+    '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+    '</sheetView></sheetViews>' +
+    '<cols>' + widths.map((w, i) =>
+      '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>').join('') +
+    '</cols>' +
+    '<sheetData>' + lines.join('') + '</sheetData>' +
+    '<autoFilter ref="A1:' + lastColumn + (rows.length + 1) + '"/>' +
+    '</worksheet>';
+
+  /* One look per (needs checking?) x (how many decimals), built in the order
+     the numbering above expects. */
+  const numberFormats = [];
+  for (let d = 1; d <= MAX_DECIMALS; d++){
+    numberFormats.push('<numFmt numFmtId="' + (163 + d) + '" formatCode="0.' +
+                       '0'.repeat(d) + '"/>');
+  }
+  const cellFormats = [
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>'
+  ];
+  [0, 3, 4].forEach(fillId => {              /* plain, needs checking, unreadable */
+    for (let d = 0; d <= MAX_DECIMALS; d++){
+      cellFormats.push(
+        '<xf numFmtId="' + (d === 0 ? 0 : 163 + d) + '" fontId="0" fillId="' + fillId +
+        '" borderId="0" xfId="0"' + (d ? ' applyNumberFormat="1"' : '') +
+        (fillId ? ' applyFill="1"' : '') + '/>');
+    }
+  });
+
+  const styles =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<numFmts count="' + numberFormats.length + '">' + numberFormats.join('') + '</numFmts>' +
+    '<fonts count="2">' +
+      '<font><sz val="11"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><name val="Calibri"/></font>' +
+    '</fonts>' +
+    /* Excel insists the first two fills are "none" and "gray125". */
+    '<fills count="5">' +
+      '<fill><patternFill patternType="none"/></fill>' +
+      '<fill><patternFill patternType="gray125"/></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="' + XLSX_HEADER_COLOUR + '"/><bgColor indexed="64"/></patternFill></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="' + XLSX_CHECK_COLOUR + '"/><bgColor indexed="64"/></patternFill></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="' + XLSX_ERROR_COLOUR + '"/><bgColor indexed="64"/></patternFill></fill>' +
+    '</fills>' +
+    '<borders count="2">' +
+      '<border><left/><right/><top/><bottom/><diagonal/></border>' +
+      '<border><left/><right/><top/><bottom style="thin"><color rgb="FFB0B6BE"/></bottom><diagonal/></border>' +
+    '</borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="' + cellFormats.length + '">' + cellFormats.join('') + '</cellXfs>' +
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+    '</styleSheet>';
+
+  const safeSheetName = xmlEscape(String(sheetName || 'Schedule').slice(0, 31)) || 'Schedule';
+
+  return makeZip([
+    { name: '[Content_Types].xml', text:
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      '</Types>' },
+    { name: '_rels/.rels', text:
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '</Relationships>' },
+    { name: 'xl/workbook.xml', text:
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="' + safeSheetName + '" sheetId="1" r:id="rId1"/></sheets>' +
+      '</workbook>' },
+    { name: 'xl/_rels/workbook.xml.rels', text:
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      '</Relationships>' },
+    { name: 'xl/styles.xml', text: styles },
+    { name: 'xl/worksheets/sheet1.xml', text: sheet }
+  ]);
+}
+
+/** Save raw bytes to a file, the way downloadTextFile saves text. */
+function downloadBytes(filename, bytes, mimeType){
+  const blob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+
 /* ===========================================================================
    12c. A SESSION YOU CAN DOUBLE-CLICK
 
@@ -2798,6 +3120,7 @@ function updateStatus(extraMessage){
 function refreshButtons(){
   $('btnRun').disabled            = state.running || !state.files.length || !state.fields.length;
   $('btnExportCsv').disabled      = state.running || !state.rows.length;
+  $('btnExportXlsx').disabled     = state.running || !state.rows.length;
   $('btnExportTemplate').disabled = state.running || !state.fields.length;
   $('btnSaveSession').disabled    = state.running || (!state.fields.length && !state.files.length);
   $('ocrMode').disabled           = state.running;
