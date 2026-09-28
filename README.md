@@ -60,11 +60,26 @@ A folder holding both kinds is fine: the decision is made page by page.
 
 ## Picking up where you left off
 
-**Save Session** writes one file holding the boxes, the results table, and — unless
-you turn it off under Info — the PDFs themselves. **Open Session** puts all of it
-back: boxes, table, documents, per-file tweaks and column order, ready to click
-through or re-run. Nothing is kept in the browser, so the file works on any machine
-and can go in the job folder with the drawings.
+Type a **job name** in the top bar. **Export CSV + session** then writes two files
+under that name: `<job name>.csv` and `<job name>.session.html`.
+
+The session file is a copy of the whole app with the work tucked inside it — the
+boxes, the results table, the per-document tweaks, the column order and, unless you
+turn it off under Info, the PDFs themselves. **Double-click it** and everything
+comes back: no opening the app first, no re-dropping the folder, no re-running.
+**Save session** on its own does the same without the CSV, and **Open session…**
+loads one into an app that is already open.
+
+Why a page and not a small data file: a `.json` double-clicked on a locked-down PC
+opens in Notepad, because nothing there knows that this HTML file is the program
+that understands it. Making the session a page of its own is the only way to get a
+file you can simply open. Two consequences worth knowing:
+
+* A session carries the version of the app that saved it. Improvements made later
+  reach it only if you open that session inside the newer app with *Open session…*
+  and save it again.
+* If you swapped the libraries for local copies, keep saved sessions in the same
+  folder as those copies, or the page will have nothing to read PDFs with.
 
 ## How to use it
 
@@ -110,7 +125,8 @@ and can go in the job folder with the drawings.
 9. **Check the results.** Rows are striped so a wide table stays readable.
    Click any cell and the page it came from is redrawn with that box on it, the
    text it pulled out is printed underneath, and the whole row is boxed in so
-   you can follow it across without losing your place.
+   you can follow it across without losing your place. The view scrolls so the
+   box lands in the middle of the screen, so there is no hunting for it.
    * A **yellow** cell means the box found nothing.
    * An **orange** cell with a `?` means the two readings of that scanned page
      disagreed about it — hover or click it to see both. This is nearly always

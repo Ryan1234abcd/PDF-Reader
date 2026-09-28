@@ -342,7 +342,9 @@ td.peeking{outline:2px solid var(--box-selected); outline-offset:-2px}
 
   <button type="button" id="btnPickFile">Open PDF&hellip;</button>
   <button type="button" id="btnRun" class="primary" disabled>Run</button>
-  <button type="button" id="btnExportCsv" disabled>Export CSV</button>
+  <button type="button" id="btnExportCsv" disabled title="Writes the schedule as a CSV and saves the session beside it, both under the name below">Export CSV + session</button>
+  <input type="text" id="sessionName" placeholder="Job name" size="16"
+         title="The name the CSV and the session file are both saved under">
 
   <span class="sep"></span>
 
@@ -942,11 +944,11 @@ dropZone.addEventListener('drop', async (e) => {
 
   /* A dropped .json is loaded rather than treated as a PDF - a whole session
      if that is what it turns out to be, otherwise just the boxes. */
-  for (const t of dropped.filter(f => /\.json$/i.test(f.name))) await loadSessionFile(t);
+  for (const t of dropped.filter(f => /\.(json|html)$/i.test(f.name))) await loadSessionFile(t);
 
   const pdf = dropped.find(f => /\.pdf$/i.test(f.name));
   if (pdf) await openMergedPdf(pdf);
-  else if (!dropped.some(f => /\.json$/i.test(f.name)))
+  else if (!dropped.some(f => /\.(json|html)$/i.test(f.name)))
     updateStatus('That was not a PDF. Drop the merged PDF file here.');
 });
 
@@ -2424,6 +2426,10 @@ async function peekAtCell(rowIndex, fieldId, tdElement){
   line2.style.marginTop = '4px';
   line2.textContent = 'Extracted' + howItWasRead + ': ' + explanation;
   info.append(line1, line2);
+
+  /* Bring the box itself into the middle of the screen, so the value being
+     checked is in front of you rather than somewhere up the page. */
+  scrollBoxIntoMiddle(field.id);
 }
 
 /** Escape the few characters that would otherwise be read as HTML. */
@@ -2468,7 +2474,13 @@ $('btnExportCsv').addEventListener('click', () => {
   }
 
   const text = (CSV_ADD_BOM ? '﻿' : '') + lines.join('\r\n') + '\r\n';
-  downloadTextFile('schedule-' + todayStamp() + '.csv', text, 'text/csv;charset=utf-8');
+  const name = sessionFileName();
+  downloadTextFile(name + '.csv', text, 'text/csv;charset=utf-8');
+
+  /* The session is saved at the same moment and under the same name, so the
+     schedule and the work behind it never drift apart. The browser is given a
+     breath between the two, or it quietly drops the second download. */
+  setTimeout(() => saveSession(name), 700);
 });
 
 /** Turn whatever was typed into something safe to use as a file name. */
@@ -2640,7 +2652,10 @@ function looksLikeASession(parsed){
 
 /* --- saving a session (the merged version) -------------------------------- */
 
-$('btnSaveSession').addEventListener('click', async () => {
+$('btnSaveSession').addEventListener('click', () => saveSession(sessionFileName()));
+
+/** Write the whole session out as a page that can be opened on its own. */
+async function saveSession(name){
   if (!state.doc && !state.fields.length) return;
   const withPdf = $('sessionWithPdfs').checked;
 
@@ -2651,6 +2666,7 @@ $('btnSaveSession').addEventListener('click', async () => {
       version     : TEMPLATE_VERSION,
       app         : 'merged',
       created     : new Date().toISOString(),
+      sessionName : normaliseWhitespace($('sessionName').value),
       templateName: normaliseWhitespace($('templateName').value),
       breaks      : state.breaks.slice().sort((a, b) => a - b),
       fields      : state.fields.map(f => ({
@@ -2673,14 +2689,15 @@ $('btnSaveSession').addEventListener('click', async () => {
       }
     }
 
-    const name = asFileName(session.templateName, 'session-' + todayStamp());
-    downloadTextFile(name + '.session.json', JSON.stringify(session), 'application/json');
-    updateStatus('Session saved as ' + name + '.session.json' +
-                 (session.pdf ? ' (with the PDF inside it).' : ' (boxes and table only).'));
+    const fileName = (name || sessionFileName()) + '.session.html';
+    downloadTextFile(fileName, buildSessionHtml(session), 'text/html;charset=utf-8');
+    updateStatus('Session saved as ' + fileName +
+                 (session.pdf ? ' (with the PDF inside it).' : ' (boxes and table only).') +
+                 ' Double-click that file to pick up where you left off.');
   } catch (err){
     showBanner('The session could not be saved: ' + err.message);
   }
-});
+}
 
 /* --- opening a session ---------------------------------------------------- */
 
@@ -2695,8 +2712,26 @@ $('sessionPicker').addEventListener('change', async (e) => {
 async function loadSessionFile(file){
   try {
     updateStatus('Opening the session…');
-    const parsed = JSON.parse(await file.text());
-    if (!looksLikeASession(parsed)) return loadTemplateFile(file);
+    const text = await file.text();
+
+    /* A saved session is a page with the work inside it; a template is plain
+       JSON. Work out which this is before trying to read it. */
+    let parsed;
+    if (/^\s*</.test(text)){
+      parsed = sessionFromHtml(text);
+    } else {
+      parsed = JSON.parse(text);
+      if (!looksLikeASession(parsed)) return loadTemplateFile(file);
+    }
+    await applySession(parsed);
+  } catch (err){
+    showBanner('That session file could not be read: ' + err.message);
+  }
+}
+
+/** Put a session's contents into the page. */
+async function applySession(parsed){
+  try {
 
     /* --- the boxes --- */
     state.fields = [];
@@ -2722,7 +2757,8 @@ async function loadSessionFile(file){
       state.fields.push(field);
       field.name = makeUniqueName(raw.name || 'Field', field.id);
     }
-    $('templateName').value = parsed.templateName || file.name.replace(/\.session\.json$/i, '');
+    $('templateName').value = parsed.templateName || '';
+    $('sessionName').value   = parsed.sessionName || parsed.templateName || '';
 
     /* --- the PDF, rebuilt from the text it was stored as --- */
     if (parsed.pdf && parsed.pdf.data){
@@ -2752,6 +2788,123 @@ async function loadSessionFile(file){
       (parsed.pdf ? '.' : ' - open the PDF again to see the pages.'));
   } catch (err){
     showBanner('That session file could not be read: ' + err.message);
+  }
+}
+
+
+
+/* ===========================================================================
+   12c. A SESSION YOU CAN DOUBLE-CLICK
+
+   A saved session is a copy of this whole page with the work tucked inside it,
+   so opening it needs nothing else: double-click the file and the app comes up
+   with the boxes drawn, the table filled in and the PDFs already loaded.
+
+   That is the only way a page like this can be reopened from a file. A plain
+   .json would just open in Notepad, because nothing on a locked-down machine
+   knows that this HTML file is the program that understands it.
+   =========================================================================== */
+
+/** The id of the block of data hidden inside a saved session file. */
+const EMBEDDED_SESSION_ID = 'embeddedSession';
+
+/* The app's own name, taken before a session is opened and allowed to rename
+   the window. Saving from a saved session would otherwise pile the job names
+   up in the title, one on top of the last. */
+const BASE_TITLE = document.title.replace(/^.*? - (?=\S)/, '');
+
+/**
+ * Build a stand-alone copy of this page with the session inside it.
+ * Everything the app drew for itself - the boxes, the table, the page picture -
+ * is cleared out first, because all of it is rebuilt from the data on opening.
+ */
+function buildSessionHtml(session){
+  const clone = document.documentElement.cloneNode(true);
+
+  /* Anything the page added to itself while running goes: the OCR library it
+     fetched, and any session already embedded from a previous save. */
+  const drop = (selector) =>
+    Array.from(clone.querySelectorAll(selector)).forEach(el => el.remove());
+  drop('script[src*="tesseract"]');
+  drop('#' + EMBEDDED_SESSION_ID);
+  drop('.fieldBox');
+
+  const blank = (selector) => {
+    const el = clone.querySelector(selector);
+    if (el) el.innerHTML = '';
+  };
+  blank('#fieldList');
+  blank('#fileList');
+  blank('#resultsTable thead');
+  blank('#resultsTable tbody');
+  blank('#previewInfo');
+  blank('#banner');
+
+  /* The window's name goes back to the app's own, not this job's. */
+  const titleEl = clone.querySelector('title');
+  if (titleEl) titleEl.textContent = BASE_TITLE;
+
+  /* Put the page picture back to its empty starting size. */
+  const canvasEl = clone.querySelector('#pageCanvas');
+  if (canvasEl){
+    canvasEl.setAttribute('width', '10');
+    canvasEl.setAttribute('height', '10');
+    canvasEl.removeAttribute('style');
+  }
+
+  /* The data itself. "<" is written as an escape so that a field named with a
+     stray tag cannot end the script block early. */
+  const payload = document.createElement('script');
+  payload.type = 'application/json';
+  payload.id   = EMBEDDED_SESSION_ID;
+  payload.textContent = JSON.stringify(session).replace(/</g, '\\u003c');
+  const body = clone.querySelector('body');
+  if (body) body.appendChild(payload);
+
+  return '<!doctype html>\n' + clone.outerHTML;
+}
+
+/** Read the session out of a saved session page. */
+function sessionFromHtml(text){
+  const parsed = new DOMParser().parseFromString(text, 'text/html');
+  const block  = parsed.getElementById(EMBEDDED_SESSION_ID);
+  if (!block) throw new Error('this page does not have a session inside it');
+  return JSON.parse(block.textContent);
+}
+
+/** The session embedded in THIS page, if it was opened from a saved session. */
+function embeddedSession(){
+  const block = document.getElementById(EMBEDDED_SESSION_ID);
+  if (!block) return null;
+  try { return JSON.parse(block.textContent); }
+  catch (err){ return null; }
+}
+
+/**
+ * The name everything gets saved under: whatever was typed in the session box,
+ * falling back to the template name and then to today's date.
+ */
+function sessionFileName(){
+  return asFileName($('sessionName').value,
+         asFileName($('templateName').value, 'schedule-' + todayStamp()));
+}
+
+/** Scroll the window (and the page view sideways) to put a box in the middle. */
+function scrollBoxIntoMiddle(fieldId){
+  const el = boxLayer.querySelector('.fieldBox[data-id="' + fieldId + '"]');
+  if (!el) return;
+
+  const box = el.getBoundingClientRect();
+
+  /* Up and down: the window itself. */
+  const wantedTop = window.scrollY + box.top + box.height / 2 - window.innerHeight / 2;
+  window.scrollTo({ top: Math.max(0, wantedTop), behavior: 'smooth' });
+
+  /* Left and right: the page view scrolls on its own when zoomed in. */
+  const viewer = document.querySelector('.viewer');
+  if (viewer && viewer.scrollWidth > viewer.clientWidth + 1){
+    const view = viewer.getBoundingClientRect();
+    viewer.scrollLeft += box.left + box.width / 2 - (view.left + viewer.clientWidth / 2);
   }
 }
 
@@ -2903,12 +3056,25 @@ $('showNames').addEventListener('change', () => {
   document.body.classList.toggle('show-all-names', $('showNames').checked);
 });
 
+/* A saved session page carries its work inside it: open it and everything is
+   put back without anyone having to find the app first. */
+async function openEmbeddedSessionIfAny(){
+  const session = embeddedSession();
+  if (!session) return;
+  document.title = (session.sessionName || session.templateName || 'Session') +
+                   ' - ' + BASE_TITLE;
+  await applySession(session);
+}
+
 setUpPdfJs().then(() => {
   renderSheetList();
   updateSheetLabel();
   renderFieldList();
   updateSelectionNote();
   refreshButtons();
+
+  /* If this file IS a saved session, put the work back straight away. */
+  openEmbeddedSessionIfAny();
 });
 
 </script>
