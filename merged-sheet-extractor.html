@@ -2840,6 +2840,15 @@ const XLSX_CHECK_COLOUR = 'FFFFE8CC';   /* the two OCR readings disagreed */
 const XLSX_ERROR_COLOUR = 'FFFFDCDC';   /* could not be read at all       */
 const XLSX_HEADER_COLOUR = 'FFEFF2F6';
 
+/* The schedule is written as a real Excel table - the same object you get from
+   Home > Format as Table - so it arrives with banded rows, filter buttons and a
+   name that formulas elsewhere can point at. Change the style to any of Excel's
+   built-in names (TableStyleLight1..21, TableStyleMedium1..28, Dark1..11), or
+   set XLSX_AS_TABLE to false for a plain sheet with filter buttons. */
+const XLSX_AS_TABLE    = true;
+const XLSX_TABLE_STYLE = 'TableStyleMedium2';
+const XLSX_TABLE_NAME  = 'Schedule';
+
 /* Write a value that is plainly a number as a number, so Excel can sum and
    sort it without the "number stored as text" warning. Anything with a letter,
    a symbol or a leading zero in front of another digit stays as text, which
@@ -2961,7 +2970,23 @@ function makeZip(parts){
  * rows are arrays of { text, flag } where flag is '', 'check' or 'error'.
  */
 function buildWorkbook(headers, rows, sheetName){
+  /* A table insists every column has a name, and that no two are the same.
+     Field names are already kept apart from each other, but one could still
+     clash with the columns added at the end, so they are settled here. */
+  const seen = Object.create(null);
+  headers = headers.map((head, i) => {
+    let name = normaliseWhitespace(String(head == null ? '' : head)) || ('Column ' + (i + 1));
+    const key = () => name.toLowerCase();
+    let n = 2;
+    while (seen[key()]) name = name.replace(/ \(\d+\)$/, '') + ' (' + (n++) + ')';
+    seen[key()] = true;
+    return name;
+  });
+
   const lastColumn = columnLetter(headers.length);
+  const lastRow    = rows.length + 1;
+  /* A table has to have a body, so a schedule with no rows stays a plain sheet. */
+  const asTable    = XLSX_AS_TABLE && rows.length > 0;
 
   /* Widen each column to roughly its longest value, within reason. */
   const widths = headers.map((head, i) => {
@@ -2996,9 +3021,10 @@ function buildWorkbook(headers, rows, sheetName){
   };
 
   const lines = [];
+  const headerStyle = asTable ? '' : ' s="' + HEADER_STYLE + '"';
   lines.push('<row r="1">' + headers.map((head, i) =>
-    '<c r="' + columnLetter(i + 1) + '1" t="inlineStr" s="' + HEADER_STYLE +
-    '"><is><t xml:space="preserve">' + xmlEscape(String(head)) + '</t></is></c>').join('') +
+    '<c r="' + columnLetter(i + 1) + '1" t="inlineStr"' + headerStyle +
+    '><is><t xml:space="preserve">' + xmlEscape(head) + '</t></is></c>').join('') +
     '</row>');
 
   rows.forEach((row, rowIndex) => {
@@ -3010,7 +3036,8 @@ function buildWorkbook(headers, rows, sheetName){
 
   const sheet =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
     '<sheetViews><sheetView tabSelected="1" workbookViewId="0">' +
     /* the header row stays on screen while the schedule is scrolled */
     '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
@@ -3019,8 +3046,26 @@ function buildWorkbook(headers, rows, sheetName){
       '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>').join('') +
     '</cols>' +
     '<sheetData>' + lines.join('') + '</sheetData>' +
-    '<autoFilter ref="A1:' + lastColumn + (rows.length + 1) + '"/>' +
+    /* The table brings its own filter buttons; having both here and there is
+       what makes Excel announce that it has repaired the file. */
+    (asTable ? '' : '<autoFilter ref="A1:' + lastColumn + lastRow + '"/>') +
+    (asTable ? '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>' : '') +
     '</worksheet>';
+
+  const tableRef = 'A1:' + lastColumn + lastRow;
+  const table =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'id="1" name="' + XLSX_TABLE_NAME + '" displayName="' + XLSX_TABLE_NAME + '" ' +
+    'ref="' + tableRef + '" totalsRowShown="0">' +
+    '<autoFilter ref="' + tableRef + '"/>' +
+    '<tableColumns count="' + headers.length + '">' +
+      headers.map((head, i) =>
+        '<tableColumn id="' + (i + 1) + '" name="' + xmlEscape(head) + '"/>').join('') +
+    '</tableColumns>' +
+    '<tableStyleInfo name="' + XLSX_TABLE_STYLE + '" showFirstColumn="0" ' +
+    'showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>' +
+    '</table>';
 
   /* One look per (needs checking?) x (how many decimals), built in the order
      the numbering above expects. */
@@ -3078,6 +3123,7 @@ function buildWorkbook(headers, rows, sheetName){
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
       '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
       '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      (asTable ? '<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>' : '') +
       '</Types>' },
     { name: '_rels/.rels', text:
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -3098,7 +3144,14 @@ function buildWorkbook(headers, rows, sheetName){
       '</Relationships>' },
     { name: 'xl/styles.xml', text: styles },
     { name: 'xl/worksheets/sheet1.xml', text: sheet }
-  ]);
+  ].concat(asTable ? [
+    { name: 'xl/worksheets/_rels/sheet1.xml.rels', text:
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>' +
+      '</Relationships>' },
+    { name: 'xl/tables/table1.xml', text: table }
+  ] : []));
 }
 
 /** Save raw bytes to a file, the way downloadTextFile saves text. */

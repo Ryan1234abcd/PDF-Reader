@@ -65,14 +65,19 @@ under that name: `<job name>.xlsx` and `<job name>.session.html` — no converti
 no saving-as.
 
 The workbook is a proper `.xlsx`, written by the page itself rather than by another
-downloaded library. It comes out ready to hand on: header row bold and frozen with
-filter buttons, columns widened to their contents, and values that are plainly
+downloaded library. The schedule arrives as a real **Excel table** — the object you
+get from *Format as Table* — so it has banded rows, filter buttons, a name
+(`Schedule`) that formulas can point at, and it grows properly if you add a row.
+The header row is frozen, columns are widened to their contents, and values that are
+plainly
 numbers stored as numbers so they sort and add up — while keeping the decimals they
 were written with, so `11.000` still reads `11.000` and not `11`. Model codes, part
 numbers and anything with a leading zero stay as text. Cells the tool was unsure of
 carry their colour into the workbook: orange where the two OCR readings disagreed,
 red where a page could not be read. A plain **CSV** button is there too, under
-**Info**, for feeding something else.
+**Info**, for feeding something else. `XLSX_TABLE_STYLE` near the top of the file
+takes any of Excel's built-in style names if you want a different look, and
+`XLSX_AS_TABLE` set to `false` gives a plain sheet with filter buttons instead.
 
 The session file is a copy of the whole app with the work tucked inside it — the
 boxes, the results table, the per-document tweaks, the column order and, unless you
